@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Name: CPU Usage
+# Name: Memory Usage
 # User: dashboard
 # Period: 5 minutes
 # Threshold: 80%
@@ -28,12 +28,11 @@ if [ "$LOG_OUTPUT" == "true" ]; then
     exec 2>&1
 fi
 
-# Get the CPU usage
-CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+# Get the memory usage
+MEMORY_USAGE=$(free | grep Mem | awk '{print $3/$2 * 100.0}')
 
-# Send the CPU usage to the monitor
-curl --silent --request POST --url "$URL?value=$CPU_USAGE"
-if [ $? != 0 ]
-then
-    echo "Failed to send CPU usage."
+# Send the memory usage to the monitor
+curl --silent --request POST --url "$URL?value=$MEMORY_USAGE"
+if [ $? != 0 ]; then
+    echo "Failed to send memory usage."
 fi

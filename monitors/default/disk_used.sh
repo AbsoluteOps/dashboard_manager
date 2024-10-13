@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Name: CPU Usage
+# Name: Disk Usage
 # User: dashboard
 # Period: 5 minutes
 # Threshold: 80%
@@ -28,12 +28,11 @@ if [ "$LOG_OUTPUT" == "true" ]; then
     exec 2>&1
 fi
 
-# Get the CPU usage
-CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+# Get the disk usage
+DISK_USAGE=$(df / | grep / | awk '{print $5}' | sed 's/%//g')
 
-# Send the CPU usage to the monitor
-curl --silent --request POST --url "$URL?value=$CPU_USAGE"
-if [ $? != 0 ]
-then
-    echo "Failed to send CPU usage."
+# Send the disk usage to the monitor
+curl --silent --request POST --url "$URL?value=$DISK_USAGE"
+if [ $? != 0 ]; then
+    echo "Failed to send disk usage."
 fi

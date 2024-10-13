@@ -1,14 +1,35 @@
 #!/bin/bash
 
+# If you change this you must also change the path
+# in the uninstall() function.
 ROOTDIR=/opt/dashboard
 BINDIR=$ROOTDIR/bin
 LOGDIR=$ROOTDIR/log
 ETCDIR=$ROOTDIR/etc
+
+CONFIG=$ETCDIR/config.settings
+CUSTOMBINDIR=$ROOTDIR/custom
+MONITORREGISTER=$ETCDIR/monitor.register
+
 API_KEY=""
 ENDPOINT_ID=""
 
 declare -a INSTALLED_MONITORS
 declare -a AVAILABLE_MONITORS
+
+is_valid_endpoint_name() {
+    local input_string=$1
+
+    if [[ -z "$input_string" ]]; then
+        return 1  # Invalid: empty string
+    elif [[ ${#input_string} -lt 3 ]]; then
+        return 1  # Invalid: less than 3 characters
+    elif [[ $input_string =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        return 0  # Valid string
+    else
+        return 1  # Invalid string
+    fi
+}
 
 check_root() {
     if [ "$EUID" -ne 0 ]; then
@@ -19,13 +40,19 @@ check_root() {
 
 init() {
     mkdir -p $BINDIR
+    mkdir -p $CUSTOMBINDIR
     mkdir -p $LOGDIR
     mkdir -p $ETCDIR
 
-    touch $ETCDIR/config.settings
+    touch $CONFIG
+    touch $MONITORREGISTER
     touch $LOGDIR/monitor.log
 
     chown dashboard $LOGDIR/monitor.log
+
+    LOG_FILE="$LOGDIR/controller.log"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    exec 2>&1
 }
 
 check_dashboard_user() {
@@ -128,23 +155,16 @@ EOF
 }
 
 get_script_name_from_monitor_name() {
-    local monitor_name=$1
-    local script_name=""
+    monitor_name=$1
+    script_name=""
 
-    crontab_entries=$(grep '# Dashboard' /etc/crontab)
-
-    while IFS= read -r entry; do
-        script_path=$(echo "$entry" | awk '{print $7}')
-
-        if [ -f "$script_path" ]; then
-            default_name=$(grep -oP '# Default name: \K.*' "$script_path")
-
-            if [ "$default_name" == "$monitor_name" ]; then
-                script_name=$script_path
-                break
-            fi
+    for monitor in monitors/default/*; do
+        default_name=$(grep -oP '# Name: \K.*' "$monitor")
+        if [ "$default_name" == "$monitor_name" ]; then
+            script_name=$monitor
+            break
         fi
-    done <<< "$crontab_entries"
+    done
 
     echo "$script_name"
 }
@@ -161,50 +181,74 @@ check_endpoint_exists() {
         fi
     fi
 
-    hostname=$(hostname)
+    if [ "$1" != "" ]; then
+        hostname=$1
+    else
+        hostname=$(hostname)
+    fi
+
     response=$(curl --silent --request GET \
         --url 'https://dashboard.absoluteops.com/api/endpoints/' \
         --header "Authorization: Bearer $API_KEY")
 
-    if echo $response | grep -q "\"name\": \"$hostname\""; then
+    if echo $response | grep -q "\"name\":\"$hostname\""; then
         echo "Endpoint with hostname $hostname already exists."
-        ENDPOINT_ID=$(echo $response | jq -r ".data[] | select(.name == \"$hostname\") | .id")
-        echo $ENDPOINT_ID > $ETCDIR/endpoint_id
-        check_endpoint_info
-    else
-        read -p "No endpoint with hostname $hostname found. Do you want to create it? (y/n): " create_endpoint
-        if [ "$create_endpoint" == "y" ]; then
-            echo "Creating endpoint..."
-            create_response=$(curl --silent --request POST \
-                --url 'https://dashboard.absoluteops.com/api/endpoints' \
-                --header "Authorization: Bearer $API_KEY" \
-                --header 'Content-Type: multipart/form-data' \
-                --form "name=$hostname")
-
-            ENDPOINT_ID=$(echo $create_response | jq -r ".data.id")
+        read -p "Do you want to reuse it, or give this server a custom name? (reuse/rename): " exists_action
+        if [ "$exists_action" == "reuse" ]; then
+            ENDPOINT_ID=$(echo $response | jq -r ".data[] | select(.name == \"$hostname\") | .id")
             echo $ENDPOINT_ID > $ETCDIR/endpoint_id
             check_endpoint_info
-            echo "Endpoint created with ID $ENDPOINT_ID."
+            return 0
+        elif [ "$exists_action" == "rename" ]; then
+            read -p "Enter the new name (3+ characters, a-zA-Z0-9_-): " new_name
+            if ! is_valid_endpoint_name "$new_name"; then
+                echo "You entered $new_name which is not valid."
+                exit 1
+            fi
+            read -p "You entered $new_name. Are you sure this is what you want to use? (y/n): " confirm_name
+            if [ "$confirm_name" == "y" ]; then
+                check_endpoint_exists $new_name
+            else
+                echo "Please try again."
+                exit 1
+            fi
+            return 0
         else
-            echo "Endpoint creation declined. Exiting..."
+            echo "Invalid input: $exists_action"
             exit 1
         fi
+    fi
+
+    read -p "No endpoint with hostname $hostname found. Do you want to create it? (y/n): " create_endpoint
+    if [ "$create_endpoint" == "y" ]; then
+        echo "Creating endpoint..."
+        create_response=$(curl --silent --request POST \
+            --url 'https://dashboard.absoluteops.com/api/endpoints' \
+            --header "Authorization: Bearer $API_KEY" \
+            --header 'Content-Type: multipart/form-data' \
+            --form "name=$hostname")
+
+        ENDPOINT_ID=$(echo $create_response | jq -r ".data.id")
+        echo $ENDPOINT_ID > $ETCDIR/endpoint_id
+        check_endpoint_info
+        echo "Endpoint created with ID $ENDPOINT_ID."
+    else
+        echo "Endpoint creation failed. Exiting..."
+        exit 1
     fi
 }
 
 get_installed_monitors() {
-    crontab_entries=$(grep '# Dashboard' /etc/crontab)
+    INSTALLED_MONITORS=()
 
-    while IFS= read -r entry; do
-        script_path=$(echo "$entry" | awk '{print $7}')
-        if [ -f "$script_path" ]; then
-            default_name=$(grep -oP '# Default name: \K.*' "$script_path")
-
-            if [ -n "$default_name" ]; then
-                INSTALLED_MONITORS+=("$default_name")
-            fi
-        fi
-    done <<< "$crontab_entries"
+    if [ -f $MONITORREGISTER ]; then
+        while IFS=';' read -r monitor_name monitor_path monitor_id; do
+            INSTALLED_MONITORS+=("$monitor_name")
+        done < $MONITORREGISTER
+    else
+        echo "Error: $MONITORREGISTER file not found."
+        return 1
+    fi
 }
 
 install_crontab_entry() {
@@ -236,25 +280,23 @@ install_crontab_entry() {
     esac
 
     # Add crontab entry with monitor code
-    if ! grep -q "dashboard $BINDIR/$monitor_script .* # Dashboard" /etc/crontab; then
-        echo "$cron_schedule $monitor_user $BINDIR/$monitor_script $monitor_code # Dashboard $monitor_id" >> /etc/crontab
+    if ! grep -q "dashboard $monitor_script .* # Dashboard" /etc/crontab; then
+        echo "$cron_schedule $monitor_user $monitor_script $monitor_code # Dashboard $monitor_id" >> /etc/crontab
     else
         echo "Crontab entry for $monitor_script already exists."
     fi
 }
 
 check_and_create_monitor() {
-    monitor_name=$1
-    monitor=$2
+    monitor=$1
+    monitor_name=$2
+    monitor_user=$3
+    monitor_period=$4
+    monitor_threshold=$5
+    monitor_direction=$6
 
-    default_name=$(grep -oP '# Name: \K.*' $monitor)
-    default_user=$(grep -oP '# User: \K.*' $monitor)
-    default_period=$(grep -oP '# Period: \K.*' $monitor)
-    default_threshold=$(grep -oP '# Threshold: \K.*' $monitor)
-    default_direction=$(grep -oP '# Direction: \K.*' $monitor)
-
-    period_value=$(echo $default_period | grep -oP '\d+')
-    period_unit=$(echo $default_period | grep -oP '\d+\K.*' | xargs)
+    period_value=$(echo $monitor_period | grep -oP '\d+')
+    period_unit=$(echo $monitor_period | grep -oP '\d+\K.*' | xargs)
 
     # Set the grace period based on the period unit
     case $period_unit in
@@ -296,14 +338,14 @@ check_and_create_monitor() {
             --url 'https://dashboard.absoluteops.com/api/monitors' \
             --header "Authorization: Bearer $API_KEY" \
             --header 'Content-Type: multipart/form-data' \
-            --form "name=$default_name" \
+            --form "name=$monitor_name" \
             --form "endpoint_id=$ENDPOINT_ID" \
             --form "run_interval=$period_value" \
             --form "run_interval_type=$period_unit" \
             --form "run_interval_grace=$grace_period" \
             --form "run_interval_grace_type=$grace_unit" \
-            --form "monitor_breach_value=$default_threshold" \
-            --form "monitor_breach_value_type=$default_direction")
+            --form "monitor_breach_value=$monitor_threshold" \
+            --form "monitor_breach_value_type=$monitor_direction")
 
         monitor_id=$(echo $create_response | jq -r '.data.id')
 
@@ -321,7 +363,8 @@ check_and_create_monitor() {
     fi
 
     if [ -n "$monitor_code" ] && [ "$monitor_code" != "null" ]; then
-        install_crontab_entry $monitor_script $monitor_id $monitor_code $default_user $period_unit $period_value
+        install_crontab_entry $monitor $monitor_id $monitor_code $monitor_user $period_unit $period_value
+        echo "$monitor_name;$monitor;$monitor_id" >> $MONITORREGISTER
         return 0
     else
         echo "Failed to retrieve monitor code for $monitor_name. Skipping..."
@@ -330,17 +373,25 @@ check_and_create_monitor() {
 }
 
 install_default_monitor() {
-    monitor_name=$(grep -oP '# Default name: \K.*' $monitor)
+    monitor=$1
+    monitor_name=$(grep -oP '# Name: \K.*' $monitor)
     echo "Installing $monitor_name..."
     monitor_script=$(basename $monitor)
 
+    cp $monitor $BINDIR/
+    monitor_dest=$BINDIR/$monitor_script
+    chmod +x $monitor_dest
+
+    monitor_user=$(grep -oP '# User: \K.*' $monitor)
+    monitor_period=$(grep -oP '# Period: \K.*' $monitor)
+    monitor_threshold=$(grep -oP '# Threshold: \K.*' $monitor)
+    monitor_direction=$(grep -oP '# Direction: \K.*' $monitor)
+
     # Check and create monitor if it doesn't exist
-    check_and_create_monitor "$monitor_name" "$monitor"
+    check_and_create_monitor "$monitor_dest" "$monitor_name" $monitor_user "$monitor_period" $monitor_threshold $monitor_direction
     if [ $? -eq 0 ]; then
-        cp $monitor $BINDIR/
-        chmod +x $BINDIR/$monitor_script
+        echo "Installed $monitor..."
     fi
-    echo "Installed $monitor..."
 }
 
 install_default_monitors() {
@@ -351,8 +402,53 @@ install_default_monitors() {
 }
 
 install_custom_monitor() {
-    echo "Installing a custom monitor..."
-    # Add commands to install a custom monitor
+    read -p "Enter the path to the custom monitor script: " script_path
+
+    # Confirm the script exists
+    if [ ! -f "$script_path" ]; then
+        echo "Error: Script not found at $script_path"
+        return 1
+    fi
+
+    read -p "Enter the monitor name: " monitor_name
+    read -p "Enter the user to run the monitor: " monitor_user
+
+    if ! id -u "$monitor_user" > /dev/null 2>&1; then
+        echo "Error: User $monitor_user does not exist."
+        return 1
+    fi
+
+    read -p "Enter the period value (eg: 5): " period_value
+
+    period_units=("minutes" "hours" "days" "weeks")
+
+    # Present a menu for the period unit
+    echo "Select the period unit:"
+    for i in "${!period_units[@]}"; do
+        echo "$((i + 1)). ${period_units[$i]}"
+    done
+    read -p "Enter choice [1-${#period_units[@]}]: " period_unit_choice
+
+    # Validate the user's choice and get the period unit
+    if [[ $period_unit_choice -gt 0 && $period_unit_choice -le ${#period_units[@]} ]]; then
+        period_unit=${period_units[$((period_unit_choice - 1))]}
+    else
+        echo "Invalid choice. Exiting..."
+        return 1
+    fi
+
+    read -p "Enter the threshold (eg: 80): " monitor_threshold
+    read -p "Enter the direction (Above/Below): " monitor_direction
+
+    cp $script_path $CUSTOMBINDIR/
+    monitor_script=$(basename $script_path)
+    monitor=$CUSTOMBINDIR/$monitor_script
+    chmod +x $monitor
+
+    check_and_create_monitor "$monitor" "$monitor_name" $monitor_user "$period_value $period_unit" $monitor_threshold $monitor_direction
+    if [ $? -eq 0 ]; then
+        echo "Installed $monitor..."
+    fi
 }
 
 list_installed_monitors() {
@@ -371,13 +467,57 @@ list_installed_monitors() {
 }
 
 list_available_monitors() {
-    echo "Listing available monitors..."
-    # Add commands to list available monitors
+    prompt_choice=$1
+    echo "Available Monitors:"
+
+    all_monitors=()
+    for monitor in monitors/default/*; do
+        monitor_name=$(grep -oP '# Name: \K.*' $monitor)
+        all_monitors+=("$monitor_name")
+    done
+
+    index=1
+    available_monitors=()
+    echo
+    for monitor in "${all_monitors[@]}"; do
+        if [[ ! " ${INSTALLED_MONITORS[*]} " =~ " $monitor " ]]; then
+            echo "$index. $monitor_name"
+            available_monitors+=("$monitor_name")
+            index=$((index + 1))
+        fi
+    done
+
+    if [ $index -eq 1 ]; then
+        echo
+        echo "No uninstalled monitors found."
+        echo "Returning to main menu..."
+    else
+        if [ "$prompt_choice" == "true" ]; then
+            echo "$index. Back to main menu"
+
+            read -p "Enter choice [1-$index]: " choice
+
+            if [[ $choice -gt 0 && $choice -le ${#available_monitors[@]} ]]; then
+                monitor_name=${available_monitors[$((choice - 1))]}
+                monitor_script=$(get_script_name_from_monitor_name "$monitor_name")
+                install_default_monitor $monitor_script
+            elif [[ $choice -eq $index ]]; then
+                echo "Returning to main menu..."
+            else
+                echo "Invalid choice, please try again."
+            fi
+        else
+            echo "Hit enter to return to the main menu."
+            read
+            echo "Returning to main menu..."
+        fi
+    fi
 }
 
 delete_monitor() {
     monitor_name=$1
-    monitor_script=$(get_script_name_from_monitor_name "$monitor_name")
+    monitor_script=$(grep "$monitor_name;" $MONITORREGISTER | awk -F\; '{print $2}')
+    monitor_id=$(grep "$monitor_name;" $MONITORREGISTER | awk -F\; '{print $3}')
 
     crontab_entry=$(grep "dashboard $monitor_script .* # Dashboard" /etc/crontab)
 
@@ -388,26 +528,41 @@ delete_monitor() {
         echo "No crontab entry found for $monitor_name."
     fi
 
-    response=$(curl --silent --request GET \
-        --url "https://dashboard.absoluteops.com/api/monitors/" \
-        --header "Authorization: Bearer $API_KEY" \
-        --data-urlencode "endpoint_id=$ENDPOINT_ID")
+    rm $monitor_script
+    sed -i "\|$monitor_script|d" $MONITORREGISTER
 
-    monitor_details=$(echo "$response" | grep -oP '{"id":\d+.*?"name":"'"$monitor_name"'".*?}')
-    monitor_id=$(echo "$monitor_details" | grep -oP '"id":\K\d+')
+    delete_response=$(curl --silent --request DELETE \
+        --url "https://dashboard.absoluteops.com/api/monitors/$monitor_id" \
+        --header "Authorization: Bearer $API_KEY")
 
-    if [ -n "$monitor_id" ]; then
-        delete_response=$(curl --silent --request DELETE \
-            --url "https://dashboard.absoluteops.com/api/monitors/$monitor_id" \
-            --header "Authorization: Bearer $API_KEY")
-
-        if [ -z "$delete_response" ]; then
-            echo "Monitor $monitor_name with ID $monitor_id deleted from the API."
-        else
-            echo "Failed to delete monitor $monitor_name from the API."
-        fi
+    if [ -z "$delete_response" ]; then
+        echo "Monitor $monitor_name with ID $monitor_id deleted from the API."
     else
-        echo "No monitor found with the name $monitor_name in the API."
+        echo "Failed to delete monitor $monitor_name from the API."
+    fi
+}
+
+uninstall() {
+    echo
+    read -p "Are you sure you want to remove the software and all history? (y/n): " confirm
+    if [[ $confirm == "y" || $confirm == "Y" ]]; then
+        for monitor_name in "${INSTALLED_MONITORS[@]}"; do
+            delete_monitor "$monitor_name"
+        done
+
+        echo "Deleting the endpoint with the API..."
+        response=$(curl --silent --request DELETE \
+            --url "https://dashboard.absoluteops.com/api/endpoints/$ENDPOINT_ID" \
+            --header "Authorization: Bearer $API_KEY" \
+            --data-urlencode "cascade_delete=1")
+
+        if [ -z "$response" ]; then
+            echo "Endpoint $ENDPOINT_ID deleted successfully."
+            # Don't trust $ROOTDIR for this
+            rm -rf /opt/dashboard
+        else
+            echo "Failed to delete endpoint $ENDPOINT_ID. Response: $response"
+        fi
     fi
 }
 
@@ -417,7 +572,8 @@ show_menu() {
     echo "1. List Monitors"
     echo "2. Install Monitors"
     echo "3. Delete Monitors"
-    echo "4. Exit"
+    echo "4. Uninstall"
+    echo "5. Exit"
 }
 
 list_monitors_menu() {
@@ -475,7 +631,7 @@ get_installed_monitors
 
 while true; do
     show_menu
-    read -p "Enter choice [1-3]: " choice
+    read -p "Enter choice [1-5]: " choice
     case $choice in
         1)
             list_monitors_menu
@@ -492,7 +648,7 @@ while true; do
             read -p "Enter choice [1-4]: " install_choice
             case $install_choice in
                 1) install_default_monitors ;;
-                2) install_default_monitor ;;
+                2) list_available_monitors true ;;
                 3) install_custom_monitor ;;
                 4) continue ;;
                 *) echo "Invalid choice, please try again." ;;
@@ -501,7 +657,10 @@ while true; do
         3)
             delete_monitor_menu
             ;;
-        4) echo "Exiting..."; exit 0 ;;
+        4)
+            uninstall
+            ;;
+        5) echo "Exiting..."; exit 0 ;;
         *) echo "Invalid choice, please try again." ;;
     esac
 done
