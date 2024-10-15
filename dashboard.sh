@@ -38,6 +38,25 @@ check_root() {
     fi
 }
 
+check_dashboard_user() {
+    if ! id -u dashboard >/dev/null 2>&1; then
+        read -p "The 'dashboard' user does not exist. Do you want to create it? (y/n): " create_user
+        if [ "$create_user" == "y" ]; then
+            sudo useradd -r -s /usr/sbin/nologin -d $ROOTDIR dashboard
+            echo "'dashboard' user created."
+        else
+            echo "User creation declined. Exiting..."
+            exit 1
+        fi
+    fi
+}
+check_jq_installed() {
+    if ! command -v jq &> /dev/null; then
+        echo "jq is not installed. Please install jq to proceed."
+        exit 1
+    fi
+}
+
 init() {
     mkdir -p $BINDIR
     mkdir -p $CUSTOMBINDIR
@@ -53,19 +72,6 @@ init() {
     LOG_FILE="$LOGDIR/controller.log"
     exec > >(tee -a "$LOG_FILE") 2>&1
     exec 2>&1
-}
-
-check_dashboard_user() {
-    if ! id -u dashboard >/dev/null 2>&1; then
-        read -p "The 'dashboard' user does not exist. Do you want to create it? (y/n): " create_user
-        if [ "$create_user" == "y" ]; then
-            sudo useradd -r -s /usr/sbin/nologin -d $ROOTDIR dashboard
-            echo "'dashboard' user created."
-        else
-            echo "User creation declined. Exiting..."
-            exit 1
-        fi
-    fi
 }
 
 check_cron_service() {
@@ -169,6 +175,22 @@ get_script_name_from_monitor_name() {
     echo "$script_name"
 }
 
+rename_endpoint() {
+    read -p "Enter the new name (3+ characters, a-zA-Z0-9_-): " new_name
+    if ! is_valid_endpoint_name "$new_name"; then
+        echo "You entered $new_name which is not valid."
+        return 1
+    fi
+    read -p "You entered $new_name. Are you sure this is what you want to use? (y/n): " confirm_name
+    if [ "$confirm_name" == "y" ]; then
+        check_endpoint_exists $new_name
+    else
+        echo "Please try again."
+        return 1
+    fi
+    return 0
+}
+
 check_endpoint_exists() {
     if [ -f $ETCDIR/endpoint_id ]; then
         ENDPOINT_ID=$(cat $ETCDIR/endpoint_id)
@@ -187,6 +209,13 @@ check_endpoint_exists() {
         hostname=$(hostname)
     fi
 
+    read -p "This endpoint will be named $hostname. Do you want to keep that name? (y/n): " keep_name
+    if [ "$keep_name" != "y" ]; then
+        until rename_endpoint; do
+            echo "Rename failed, retrying..."
+        done
+    fi
+
     response=$(curl --silent --request GET \
         --url 'https://dashboard.absoluteops.com/api/endpoints/' \
         --header "Authorization: Bearer $API_KEY")
@@ -197,22 +226,13 @@ check_endpoint_exists() {
         if [ "$exists_action" == "reuse" ]; then
             ENDPOINT_ID=$(echo $response | jq -r ".data[] | select(.name == \"$hostname\") | .id")
             echo $ENDPOINT_ID > $ETCDIR/endpoint_id
+            echo $hostname > $ETCDIR/endpoint_name
             check_endpoint_info
             return 0
         elif [ "$exists_action" == "rename" ]; then
-            read -p "Enter the new name (3+ characters, a-zA-Z0-9_-): " new_name
-            if ! is_valid_endpoint_name "$new_name"; then
-                echo "You entered $new_name which is not valid."
-                exit 1
-            fi
-            read -p "You entered $new_name. Are you sure this is what you want to use? (y/n): " confirm_name
-            if [ "$confirm_name" == "y" ]; then
-                check_endpoint_exists $new_name
-            else
-                echo "Please try again."
-                exit 1
-            fi
-            return 0
+            until rename_endpoint; do
+                echo "Rename failed, retrying..."
+            done
         else
             echo "Invalid input: $exists_action"
             exit 1
@@ -230,6 +250,7 @@ check_endpoint_exists() {
 
         ENDPOINT_ID=$(echo $create_response | jq -r ".data.id")
         echo $ENDPOINT_ID > $ETCDIR/endpoint_id
+        echo $hostname > $ETCDIR/endpoint_name
         check_endpoint_info
         echo "Endpoint created with ID $ENDPOINT_ID."
     else
@@ -276,7 +297,6 @@ install_crontab_entry() {
             ;;
         *)
             echo "Unsupported period unit: $period_unit. Skipping..."
-            continue
             ;;
     esac
 
@@ -297,8 +317,8 @@ check_and_create_monitor() {
     monitor_direction=$6
     monitor_args=$7
 
-    period_value=$(echo $monitor_period | grep -oP '\d+')
-    period_unit=$(echo $monitor_period | grep -oP '\d+\K.*' | xargs)
+    period_value=$(echo $monitor_period | awk '{print $1}')
+    period_unit=$(echo $monitor_period | awk '{print $2}')
 
     # Set the grace period based on the period unit
     case $period_unit in
@@ -331,9 +351,8 @@ check_and_create_monitor() {
         --data-urlencode "endpoint_id=$ENDPOINT_ID")
 
     if echo $response | grep -q "\"name\":\"$monitor_name\""; then
-        monitor_details=$(echo "$response" | grep -oP '{"id":\d+.*?"name":"'"$monitor_name"'".*?}')
-        monitor_id=$(echo "$monitor_details" | grep -oP '"id":\K\d+')
-        monitor_code=$(echo "$monitor_details" | grep -oP '"code":"\K[^"]+')
+        monitor_id=$(echo "$response" | jq -r --arg name "$monitor_name" '.data[] | select(.name == $name) | .id')
+        monitor_code=$(echo "$response" | jq -r --arg name "$monitor_name" '.data[] | select(.name == $name) | .code')
     else
         # Create the monitor using the API
         create_response=$(curl --silent --request POST \
@@ -388,7 +407,7 @@ install_default_monitor() {
     monitor_period=$(grep -oP '# Period: \K.*' $monitor)
     monitor_threshold=$(grep -oP '# Threshold: \K.*' $monitor)
     monitor_direction=$(grep -oP '# Direction: \K.*' $monitor)
-    monitor_args=$(grep -oP '# Args: \K.*' "$monitor_script")
+    monitor_args=$(grep -oP '# Args: \K.*' "$monitor")
 
     # Check and create monitor if it doesn't exist
     check_and_create_monitor "$monitor_dest" "$monitor_name" $monitor_user "$monitor_period" $monitor_threshold $monitor_direction "$monitor_args"
@@ -652,8 +671,9 @@ delete_monitor_menu() {
 }
 
 check_root
-init
 check_dashboard_user
+check_jq_installed
+init
 check_cron_service
 prompt_api_key
 check_endpoint_exists
