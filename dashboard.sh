@@ -258,6 +258,7 @@ install_crontab_entry() {
     monitor_user=$4
     period_unit=$5
     period_value=$6
+    monitor_args=$7
 
     # Convert period to cron format
     case $period_unit in
@@ -281,7 +282,7 @@ install_crontab_entry() {
 
     # Add crontab entry with monitor code
     if ! grep -q "dashboard $monitor_script .* # Dashboard" /etc/crontab; then
-        echo "$cron_schedule $monitor_user $monitor_script $monitor_code # Dashboard $monitor_id" >> /etc/crontab
+        echo "$cron_schedule $monitor_user $monitor_script $monitor_code $monitor_args # Dashboard $monitor_id" >> /etc/crontab
     else
         echo "Crontab entry for $monitor_script already exists."
     fi
@@ -294,6 +295,7 @@ check_and_create_monitor() {
     monitor_period=$4
     monitor_threshold=$5
     monitor_direction=$6
+    monitor_args=$7
 
     period_value=$(echo $monitor_period | grep -oP '\d+')
     period_unit=$(echo $monitor_period | grep -oP '\d+\K.*' | xargs)
@@ -363,7 +365,7 @@ check_and_create_monitor() {
     fi
 
     if [ -n "$monitor_code" ] && [ "$monitor_code" != "null" ]; then
-        install_crontab_entry $monitor $monitor_id $monitor_code $monitor_user $period_unit $period_value
+        install_crontab_entry $monitor $monitor_id $monitor_code $monitor_user $period_unit $period_value "$monitor_args"
         echo "$monitor_name;$monitor;$monitor_id" >> $MONITORREGISTER
         return 0
     else
@@ -386,9 +388,10 @@ install_default_monitor() {
     monitor_period=$(grep -oP '# Period: \K.*' $monitor)
     monitor_threshold=$(grep -oP '# Threshold: \K.*' $monitor)
     monitor_direction=$(grep -oP '# Direction: \K.*' $monitor)
+    monitor_args=$(grep -oP '# Args: \K.*' "$monitor_script")
 
     # Check and create monitor if it doesn't exist
-    check_and_create_monitor "$monitor_dest" "$monitor_name" $monitor_user "$monitor_period" $monitor_threshold $monitor_direction
+    check_and_create_monitor "$monitor_dest" "$monitor_name" $monitor_user "$monitor_period" $monitor_threshold $monitor_direction "$monitor_args"
     if [ $? -eq 0 ]; then
         echo "Installed $monitor..."
     fi
@@ -410,16 +413,34 @@ install_custom_monitor() {
         return 1
     fi
 
-    read -p "Enter the monitor name: " monitor_name
-    read -p "Enter the user to run the monitor: " monitor_user
+    default_name=$(grep -oP '# Name: \K.*' "$script_path")
+    default_user=$(grep -oP '# User: \K.*' "$script_path")
+    default_period=$(grep -oP '# Period: \K.*' "$script_path")
+    default_threshold=$(grep -oP '# Threshold: \K.*' "$script_path")
+    default_direction=$(grep -oP '# Direction: \K.*' "$script_path")
+    default_args=$(grep -oP '# Args: \K.*' "$script_path")
+    default_period_value=$(echo $default_period | grep -oP '\d+')
+    default_period_unit=$(echo $default_period | grep -oP '\d+\K.*' | xargs)
 
+    # Prompt for monitor name, suggesting the default if available
+    read -p "Enter the monitor name [${default_name}]: " monitor_name
+    monitor_name=${monitor_name:-$default_name}
+
+    # Prompt for user to run the monitor, suggesting the default if available
+    read -p "Enter the user to run the monitor [${default_user}]: " monitor_user
+    monitor_user=${monitor_user:-$default_user}
+
+    # Check if the user exists
     if ! id -u "$monitor_user" > /dev/null 2>&1; then
         echo "Error: User $monitor_user does not exist."
         return 1
     fi
 
-    read -p "Enter the period value (eg: 5): " period_value
+    # Prompt for period value, suggesting the default if available
+    read -p "Enter the period value (e.g., 5) [${default_period_value}]: " period_value
+    period_value=${period_value:-$default_period_value}
 
+    # Define an array for the period units
     period_units=("minutes" "hours" "days" "weeks")
 
     # Present a menu for the period unit
@@ -437,15 +458,24 @@ install_custom_monitor() {
         return 1
     fi
 
-    read -p "Enter the threshold (eg: 80): " monitor_threshold
-    read -p "Enter the direction (Above/Below): " monitor_direction
+    # Prompt for threshold, suggesting the default if available
+    read -p "Enter the threshold (e.g., 80%) [${default_threshold}]: " monitor_threshold
+    monitor_threshold=${monitor_threshold:-$default_threshold}
+
+    # Prompt for direction, suggesting the default if available
+    read -p "Enter the direction (Above/Below) [${default_direction}]: " monitor_direction
+    monitor_direction=${monitor_direction:-$default_direction}
+
+    # Prompt for additional arguments, suggesting the default if available
+    read -p "Enter any additional arguments for the monitor [${default_args}]: " monitor_args
+    monitor_args=${monitor_args:-$default_args}
 
     cp $script_path $CUSTOMBINDIR/
     monitor_script=$(basename $script_path)
     monitor=$CUSTOMBINDIR/$monitor_script
     chmod +x $monitor
 
-    check_and_create_monitor "$monitor" "$monitor_name" $monitor_user "$period_value $period_unit" $monitor_threshold $monitor_direction
+    check_and_create_monitor "$monitor" "$monitor_name" $monitor_user "$period_value $period_unit" $monitor_threshold $monitor_direction "$monitor_args"
     if [ $? -eq 0 ]; then
         echo "Installed $monitor..."
     fi

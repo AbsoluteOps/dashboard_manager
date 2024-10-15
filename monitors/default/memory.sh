@@ -3,7 +3,7 @@
 # Name: Memory Usage
 # User: dashboard
 # Period: 5 minutes
-# Threshold: 80%
+# Threshold: 80
 # Direction: Above
 
 ROOTDIR=/opt/dashboard
