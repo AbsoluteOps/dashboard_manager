@@ -29,7 +29,7 @@ if [ "$LOG_OUTPUT" == "true" ]; then
 fi
 
 # Get the CPU usage
-CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+CPU_USAGE=$(top -bn1 | awk '/Cpu/ { print 100 - $8}')
 
 # Send the CPU usage to the monitor
 curl --silent --request POST --url "$URL?value=$CPU_USAGE"
