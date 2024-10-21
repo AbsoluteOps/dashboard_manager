@@ -28,12 +28,15 @@ if [ "$LOG_OUTPUT" == "true" ]; then
     exec 2>&1
 fi
 
+sleep 15
 # Get the CPU usage
-CPU_USAGE=$(top -bn1 | awk '/Cpu/ { print 100 - $8}')
+CPU_IDLE=$(top -bn1 | awk -F, '/Cpu/ {print $4}' | awk '{print $1}')
+CPU_USAGE=$(bc <<< 'scale=2; 100-'$CPU_IDLE)
 
 # Send the CPU usage to the monitor
-curl --silent --request POST --url "$URL?value=$CPU_USAGE"
+curl --silent --request GET --url "$URL?value=$CPU_USAGE"
 if [ $? != 0 ]
 then
     echo "Failed to send CPU usage."
 fi
+
