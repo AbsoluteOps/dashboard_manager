@@ -4,7 +4,7 @@
 # User: dashboard
 # Period: 5 minutes
 # Threshold: 1
-# Direction: Above
+# Direction: Below
 
 ROOTDIR=/opt/dashboard
 ETCDIR=$ROOTDIR/etc

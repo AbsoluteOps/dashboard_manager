@@ -301,7 +301,7 @@ install_crontab_entry() {
     esac
 
     # Add crontab entry with monitor code
-    if ! grep -q "dashboard $monitor_script .* # Dashboard" /etc/crontab; then
+    if ! grep -q "dashboard $monitor_script .* $monitor_args\? # Dashboard" /etc/crontab; then
         echo "$cron_schedule $monitor_user $monitor_script $monitor_code $monitor_args # Dashboard $monitor_id" >> /etc/crontab
     else
         echo "Crontab entry for $monitor_script already exists."
@@ -714,3 +714,4 @@ while true; do
         *) echo "Invalid choice, please try again." ;;
     esac
 done
+
