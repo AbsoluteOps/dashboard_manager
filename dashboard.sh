@@ -21,6 +21,20 @@ declare -a INSTALLED_MONITORS
 declare -a AVAILABLE_MONITORS
 
 log() {
+    # Description: Use to log other functions results.
+    # Expectation: LOGDIR and LOGFILE variables are defined.
+    # Structure: log "<message>" <optional:log_level> <optional:quiet_bool>
+    #   "<message>"   Message enclosed in double quotes to act as initial value.
+    #   <log_level>   Whatever log level. Current expecting: info (default), warn, error, other.
+    #   <quiet_bool>  Bool for quiet (true/false). Used to remove output to user. Still sends to log.
+    # Usage Examples:
+    #   log "My info message to user and log file"
+    #   log "My info message to user and log file" info
+    #   log "My info message to log file only" info true
+    #   log "My error message to user and log file" error
+    #   log "My error message to log file only" error true
+
+    # Provided internal vars
     local log_msg="$1"
     local log_level="${2:-info}"
     local quiet="${3:-false}"
@@ -95,13 +109,17 @@ init() {
 
     touch $CONFIG
     touch $MONITORREGISTER
+    touch $LOGDIR/$LOGFILE
     touch $LOGDIR/$LOGFILE_MONITOR
 
-    chown dashboard $LOGDIR/$LOGFILE_MONITOR
+    chown dashboard $LOGDIR/$LOGFILE $LOGDIR/$LOGFILE_MONITOR
 
     LOG_FILE="$LOGDIR/$LOGFILE_CONTROLLER"
     exec > >(tee -a "$LOG_FILE") 2>&1
     exec 2>&1
+
+    log "---------------------------" info true
+    log "Starting dashboard..." info true
 }
 
 check_cron_service() {
