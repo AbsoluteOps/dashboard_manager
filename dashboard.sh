@@ -5,6 +5,8 @@
 ROOTDIR=/opt/dashboard
 BINDIR=$ROOTDIR/bin
 LOGDIR=$ROOTDIR/log
+LOGFILE_MONITOR=monitor.log
+LOGFILE_CONTROLLER=controller.log
 ETCDIR=$ROOTDIR/etc
 
 CONFIG=$ETCDIR/config.settings
@@ -17,23 +19,50 @@ ENDPOINT_ID=""
 declare -a INSTALLED_MONITORS
 declare -a AVAILABLE_MONITORS
 
+log() {
+    local log_msg="$1"
+    local log_level="${2:-info}"
+    local quiet="${3:-false}"
+    local timestamp
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+
+    # Capitalize log level and format it to fit within 8-character brackets
+    local log_level_formatted
+    log_level_formatted=$(printf "[%-8s]" "${log_level^^}")
+
+    # Define the log entry format
+    local log_entry="[$timestamp] $log_level_formatted $log_msg"
+
+    # Log to file
+    echo "$log_entry" >> /path/to/logfile.log
+
+    # Display to user unless "quiet" is set to true
+    if [[ "$quiet" != true ]]; then
+        echo "  $log_msg"
+    fi
+}
+
 is_valid_endpoint_name() {
     local input_string=$1
 
     if [[ -z "$input_string" ]]; then
+        log "Invalid endpoint name (empty): ${input_string}" error
         return 1  # Invalid: empty string
     elif [[ ${#input_string} -lt 3 ]]; then
+        log "Invalid endpoint name (too short): ${input_string}" error
         return 1  # Invalid: less than 3 characters
     elif [[ $input_string =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        log "Endpoint name (valid): ${input_string}" info
         return 0  # Valid string
     else
+        log "Invalid endpoint name (error): ${input_string}" error
         return 1  # Invalid string
     fi
 }
 
 check_root() {
     if [ "$EUID" -ne 0 ]; then
-        echo "This script must be run as root. Exiting..."
+        log "This script must be run as root. Exiting..." error
         exit 1
     fi
 }
@@ -43,16 +72,16 @@ check_dashboard_user() {
         read -p "The 'dashboard' user does not exist. Do you want to create it? (y/n): " create_user
         if [ "$create_user" == "y" ]; then
             sudo useradd -r -s /usr/sbin/nologin -d $ROOTDIR dashboard
-            echo "'dashboard' user created."
+            log "'dashboard' user created."
         else
-            echo "User creation declined. Exiting..."
+            log "User creation declined. Exiting..." error
             exit 1
         fi
     fi
 }
 check_jq_installed() {
     if ! command -v jq &> /dev/null; then
-        echo "jq is not installed. Please install jq to proceed."
+        log "jq is not installed. Please install jq to proceed." error
         exit 1
     fi
 }
@@ -65,11 +94,11 @@ init() {
 
     touch $CONFIG
     touch $MONITORREGISTER
-    touch $LOGDIR/monitor.log
+    touch $LOGDIR/$LOGFILE_MONITOR
 
-    chown dashboard $LOGDIR/monitor.log
+    chown dashboard $LOGDIR/$LOGFILE_MONITOR
 
-    LOG_FILE="$LOGDIR/controller.log"
+    LOG_FILE="$LOGDIR/$LOGFILE_CONTROLLER"
     exec > >(tee -a "$LOG_FILE") 2>&1
     exec 2>&1
 }
@@ -80,7 +109,7 @@ check_cron_service() {
     elif systemctl list-unit-files | grep -q '^crond\.service'; then
         service_name="crond"
     else
-        echo "No cron service found. Exiting..."
+        log "No cron service found. Exiting..." error
         exit 1
     fi
 
@@ -90,12 +119,12 @@ check_cron_service() {
             sudo systemctl enable $service_name
             sudo systemctl start $service_name
             if ! systemctl is-active $service_name >/dev/null 2>&1; then
-                echo "Failed to start $service_name. Exiting..."
+                log "Failed to start $service_name. Exiting..." error
                 exit 1
             fi
-            echo "$service_name enabled and started."
+            log "$service_name enabled and started."
         else
-            echo "$service_name not enabled. Exiting..."
+            log "$service_name not enabled. Exiting..." error
             exit 1
         fi
     fi
@@ -103,14 +132,14 @@ check_cron_service() {
 
 prompt_api_key() {
     if [ -f $ETCDIR/api_key ]; then
-        echo "Found an API key at $ETCDIR/api_key."
+        log "Found an API key at $ETCDIR/api_key."
         API_KEY=$(cat $ETCDIR/api_key)
     else
         read -p "Please enter your API key: " API_KEY
         read -p "Do you want to save the API key? (y/n): " save_key
         if [ "$save_key" == "y" ]; then
             echo $API_KEY > $ETCDIR/api_key
-            echo "API key saved to $ETCDIR/api_key."
+            log "API key saved to $ETCDIR/api_key."
         fi
     fi
 }
@@ -149,14 +178,14 @@ EOF
             --form "ram_amount=$ram_amount")
 
         if echo $response | grep -q '"id"'; then
-            echo "Endpoint information updated successfully."
+            log "Endpoint information updated successfully."
             echo "$new_system_info" > $ETCDIR/system_info
         else
-            echo "Failed to update endpoint information. Exiting..."
+            log "Failed to update endpoint information. Exiting..." error
             exit 1
         fi
     else
-        echo "System information has not changed. No update needed."
+        log "System information has not changed. No update needed."
     fi
 }
 
@@ -178,14 +207,14 @@ get_script_name_from_monitor_name() {
 rename_endpoint() {
     read -p "Enter the new name (3+ characters, a-zA-Z0-9_-): " new_name
     if ! is_valid_endpoint_name "$new_name"; then
-        echo "You entered $new_name which is not valid."
+        log "You entered $new_name which is not valid." error
         return 1
     fi
     read -p "You entered $new_name. Are you sure this is what you want to use? (y/n): " confirm_name
     if [ "$confirm_name" == "y" ]; then
         check_endpoint_exists $new_name
     else
-        echo "Please try again."
+        log "Please try again." warn
         return 1
     fi
     return 0
@@ -195,11 +224,11 @@ check_endpoint_exists() {
     if [ -f $ETCDIR/endpoint_id ]; then
         ENDPOINT_ID=$(cat $ETCDIR/endpoint_id)
         if [[ $ENDPOINT_ID =~ ^[0-9]+$ ]]; then
-            echo "Endpoint ID $ENDPOINT_ID already exists at $ETCDIR/endpoint_id."
+            log "Endpoint ID $ENDPOINT_ID already exists at $ETCDIR/endpoint_id."
             check_endpoint_info
             return
         else
-            echo "Invalid endpoint ID found in $ETCDIR/endpoint_id. Proceeding with API check..."
+            log "Invalid endpoint ID found in $ETCDIR/endpoint_id. Proceeding with API check..." error
         fi
     fi
 
@@ -212,7 +241,7 @@ check_endpoint_exists() {
     read -p "This endpoint will be named $hostname. Do you want to keep that name? (y/n): " keep_name
     if [ "$keep_name" != "y" ]; then
         until rename_endpoint; do
-            echo "Rename failed, retrying..."
+            log "Rename failed, retrying..." warn
         done
     fi
 
@@ -221,7 +250,7 @@ check_endpoint_exists() {
         --header "Authorization: Bearer $API_KEY")
 
     if echo $response | grep -q "\"name\":\"$hostname\""; then
-        echo "Endpoint with hostname $hostname already exists."
+        log "Endpoint with hostname $hostname already exists." warn
         read -p "Do you want to reuse it, or give this server a custom name? (reuse/rename): " exists_action
         if [ "$exists_action" == "reuse" ]; then
             ENDPOINT_ID=$(echo $response | jq -r ".data[] | select(.name == \"$hostname\") | .id")
@@ -231,17 +260,17 @@ check_endpoint_exists() {
             return 0
         elif [ "$exists_action" == "rename" ]; then
             until rename_endpoint; do
-                echo "Rename failed, retrying..."
+                log "Rename failed, retrying..." warn
             done
         else
-            echo "Invalid input: $exists_action"
+            log "Invalid input: $exists_action" error
             exit 1
         fi
     fi
 
     read -p "No endpoint with hostname $hostname found. Do you want to create it? (y/n): " create_endpoint
     if [ "$create_endpoint" == "y" ]; then
-        echo "Creating endpoint..."
+        log "Creating endpoint..."
         create_response=$(curl --silent --request POST \
             --url 'https://dashboard.absoluteops.com/api/endpoints' \
             --header "Authorization: Bearer $API_KEY" \
@@ -252,9 +281,9 @@ check_endpoint_exists() {
         echo $ENDPOINT_ID > $ETCDIR/endpoint_id
         echo $hostname > $ETCDIR/endpoint_name
         check_endpoint_info
-        echo "Endpoint created with ID $ENDPOINT_ID."
+        log "Endpoint created with ID $ENDPOINT_ID."
     else
-        echo "Endpoint creation failed. Exiting..."
+        log "Endpoint creation failed. Exiting..." error
         exit 1
     fi
 }
@@ -267,7 +296,7 @@ get_installed_monitors() {
             INSTALLED_MONITORS+=("$monitor_name")
         done < $MONITORREGISTER
     else
-        echo "Error: $MONITORREGISTER file not found."
+        log "Error: $MONITORREGISTER file not found." error
         return 1
     fi
 }
@@ -296,7 +325,7 @@ install_crontab_entry() {
             cron_schedule="0 0 * * */$period_value"
             ;;
         *)
-            echo "Unsupported period unit: $period_unit. Skipping..."
+            log "Unsupported period unit: $period_unit. Skipping..." error
             ;;
     esac
 
@@ -304,7 +333,7 @@ install_crontab_entry() {
     if ! grep -q "dashboard $monitor_script .* $monitor_args\? # Dashboard" /etc/crontab; then
         echo "$cron_schedule $monitor_user $monitor_script $monitor_code $monitor_args # Dashboard $monitor_id" >> /etc/crontab
     else
-        echo "Crontab entry for $monitor_script already exists."
+        log "Crontab entry for $monitor_script already exists." warn
     fi
 }
 
@@ -339,7 +368,7 @@ check_and_create_monitor() {
             grace_unit="days"
             ;;
         *)
-            echo "Unsupported period unit: $period_unit. Skipping..."
+            log "Unsupported period unit: $period_unit. Skipping..." error
             return 1
             ;;
     esac
@@ -352,7 +381,7 @@ check_and_create_monitor() {
     if echo $response | grep -q "\"name\":\"$monitor_name\""; then
         monitor_id=$(echo "$response" | jq -r --arg name "$monitor_name" '.data[] | select(.name == $name) | .id')
         monitor_code=$(echo "$response" | jq -r --arg name "$monitor_name" '.data[] | select(.name == $name) | .code')
-	echo "found monitor $monitor_id"
+	    log "found monitor $monitor_id"
     else
         # Create the monitor using the API
         create_response=$(curl --silent --request POST \
@@ -378,7 +407,7 @@ check_and_create_monitor() {
 
             monitor_code=$(echo $monitor_response | jq -r '.data.code')
         else
-            echo "Failed to create monitor $monitor_name. Skipping..."
+            log "Failed to create monitor $monitor_name. Skipping..." error
             return 1
         fi
     fi
@@ -388,7 +417,7 @@ check_and_create_monitor() {
         echo "$monitor_name;$monitor;$monitor_id" >> $MONITORREGISTER
         return 0
     else
-        echo "Failed to retrieve monitor code for $monitor_name. Skipping..."
+        log "Failed to retrieve monitor code for $monitor_name. Skipping..." error
         return 1
     fi
 }
@@ -396,7 +425,7 @@ check_and_create_monitor() {
 install_default_monitor() {
     monitor=$1
     monitor_name=$(grep -oP '# Name: \K.*' $monitor)
-    echo "Installing $monitor_name..."
+    log "Installing $monitor_name..."
     monitor_script=$(basename $monitor)
 
     cp $monitor $BINDIR/
@@ -412,12 +441,12 @@ install_default_monitor() {
     # Check and create monitor if it doesn't exist
     check_and_create_monitor "$monitor_dest" "$monitor_name" $monitor_user "$monitor_period" $monitor_threshold $monitor_direction "$monitor_args"
     if [ $? -eq 0 ]; then
-        echo "Installed $monitor..."
+        log "Installed $monitor..."
     fi
 }
 
 install_default_monitors() {
-    echo "Installing default monitors..."
+    log "Installing default monitors..."
     for monitor in monitors/default/*; do
         install_default_monitor $monitor
     done
@@ -428,7 +457,7 @@ install_custom_monitor() {
 
     # Confirm the script exists
     if [ ! -f "$script_path" ]; then
-        echo "Error: Script not found at $script_path"
+        log "Error: Script not found at $script_path" error
         return 1
     fi
 
@@ -451,7 +480,7 @@ install_custom_monitor() {
 
     # Check if the user exists
     if ! id -u "$monitor_user" > /dev/null 2>&1; then
-        echo "Error: User $monitor_user does not exist."
+        log "Error: User $monitor_user does not exist." error
         return 1
     fi
 
@@ -473,7 +502,7 @@ install_custom_monitor() {
     if [[ $period_unit_choice -gt 0 && $period_unit_choice -le ${#period_units[@]} ]]; then
         period_unit=${period_units[$((period_unit_choice - 1))]}
     else
-        echo "Invalid choice. Exiting..."
+        log "Invalid choice. Exiting..." error
         return 1
     fi
 
@@ -496,7 +525,7 @@ install_custom_monitor() {
 
     check_and_create_monitor "$monitor" "$monitor_name" $monitor_user "$period_value $period_unit" $monitor_threshold $monitor_direction "$monitor_args"
     if [ $? -eq 0 ]; then
-        echo "Installed $monitor..."
+        log "Installed $monitor..."
     fi
 }
 
@@ -553,7 +582,7 @@ list_available_monitors() {
             elif [[ $choice -eq $index ]]; then
                 echo "Returning to main menu..."
             else
-                echo "Invalid choice, please try again."
+                echo "Invalid choice, please try again." warn
             fi
         else
             echo "Hit enter to return to the main menu."
@@ -572,9 +601,9 @@ delete_monitor() {
 
     if [ -n "$crontab_entry" ]; then
         sed -i "\|$monitor_script .* # Dashboard|d" /etc/crontab
-        echo "Crontab entry for $monitor_name removed."
+        log "Crontab entry for $monitor_name removed."
     else
-        echo "No crontab entry found for $monitor_name."
+        log "No crontab entry found for $monitor_name." warn
     fi
 
     rm $monitor_script
@@ -585,9 +614,9 @@ delete_monitor() {
         --header "Authorization: Bearer $API_KEY")
 
     if [ -z "$delete_response" ]; then
-        echo "Monitor $monitor_name with ID $monitor_id deleted from the API."
+        log "Monitor $monitor_name with ID $monitor_id deleted from the API."
     else
-        echo "Failed to delete monitor $monitor_name from the API."
+        log "Failed to delete monitor $monitor_name from the API." warn
     fi
 }
 
@@ -599,18 +628,18 @@ uninstall() {
             delete_monitor "$monitor_name"
         done
 
-        echo "Deleting the endpoint with the API..."
+        log "Deleting the endpoint with the API..."
         response=$(curl --silent --request DELETE \
             --url "https://dashboard.absoluteops.com/api/endpoints/$ENDPOINT_ID" \
             --header "Authorization: Bearer $API_KEY" \
             --data-urlencode "cascade_delete=1")
 
         if [ -z "$response" ]; then
-            echo "Endpoint $ENDPOINT_ID deleted successfully."
+            log "Endpoint $ENDPOINT_ID deleted successfully."
             # Don't trust $ROOTDIR for this
             rm -rf /opt/dashboard
         else
-            echo "Failed to delete endpoint $ENDPOINT_ID. Response: $response"
+            log "Failed to delete endpoint $ENDPOINT_ID. Response: $response" warn
         fi
     fi
 }
