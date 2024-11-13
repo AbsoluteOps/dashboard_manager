@@ -5,6 +5,7 @@
 ROOTDIR=/opt/dashboard
 BINDIR=$ROOTDIR/bin
 LOGDIR=$ROOTDIR/log
+LOGFILE=dashboard_manager.log
 LOGFILE_MONITOR=monitor.log
 LOGFILE_CONTROLLER=controller.log
 ETCDIR=$ROOTDIR/etc
@@ -34,7 +35,7 @@ log() {
     local log_entry="[$timestamp] $log_level_formatted $log_msg"
 
     # Log to file
-    echo "$log_entry" >> /path/to/logfile.log
+    echo "$log_entry" >> "$LOGDIR/$LOGFILE"
 
     # Display to user unless "quiet" is set to true
     if [[ "$quiet" != true ]]; then
