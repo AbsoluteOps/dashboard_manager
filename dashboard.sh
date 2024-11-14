@@ -76,6 +76,10 @@ is_valid_endpoint_name() {
 }
 
 check_root() {
+    # Make sure logging is ready
+    mkdir -p $LOGDIR
+    touch $LOGDIR/$LOGFILE
+
     if [ "$EUID" -ne 0 ]; then
         log "This script must be run as root. Exiting..." error
         exit 1
