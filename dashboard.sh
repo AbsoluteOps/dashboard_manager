@@ -3,16 +3,18 @@
 # If you change this you must also change the path
 # in the uninstall() function.
 ROOTDIR=/opt/dashboard
-BINDIR=$ROOTDIR/bin
-LOGDIR=$ROOTDIR/log
-LOGFILE=dashboard_manager.log
-LOGFILE_MONITOR=monitor.log
-LOGFILE_CONTROLLER=controller.log
-ETCDIR=$ROOTDIR/etc
+BINDIR="$ROOTDIR/bin"
+ETCDIR="$ROOTDIR/etc"
 
-CONFIG=$ETCDIR/config.settings
-CUSTOMBINDIR=$ROOTDIR/custom
-MONITORREGISTER=$ETCDIR/monitor.register
+# Logging vars (review log() info for more context)
+LOGDIR="$ROOTDIR/log"
+LOGFILE="$LOGDIR/dashboard_manager.log"
+LOGFILE_MONITOR="$LOGDIR/dashboard_monitor.log"
+LOGFILE_CONTROLLER="$LOGDIR/dashboard_controller.log"
+
+CONFIG="$ETCDIR/config.settings"
+CUSTOMBINDIR="$ROOTDIR/custom"
+MONITORREGISTER="$ETCDIR/monitor.register"
 
 API_KEY=""
 ENDPOINT_ID=""
@@ -23,14 +25,20 @@ declare -a AVAILABLE_MONITORS
 log() {
     # Description: Use to log other functions results.
     # Expectation: LOGDIR and LOGFILE variables are defined.
-    # Structure: log "<message>" <optional:log_level> <optional:quiet_bool>
+    # Structure: log "<message>" <optional:log_level> <optional:quiet_bool> <optional:log_type>
     #   "<message>"   Message enclosed in double quotes to act as initial value.
     #   <log_level>   Whatever log level. Current expecting: info (default), warn, error, other.
-    #   <quiet_bool>  Bool for quiet (true/false). Used to remove output to user. Still sends to log.
+    #   <quiet_bool>  Bool for quiet (true/false). Used to remove output to user when true, but still sends to log.
+    #   <log_type>    General is defaulted/assumed. When define, must add other optionals. Allowed types:
+    #                 - GENERAL     Sends to LOGFILE
+    #                 - MONITOR     Sends to LOGFILE_MONITOR
+    #                 - CONTROLLER  Sends to LOGFILE_CONTROLLER
+    #                 - <Other>     More can be added as long as LOGFILE_<TYPE> is set
     # Usage Examples:
     #   log "My info message to user and log file"
     #   log "My info message to user and log file" info
     #   log "My info message to log file only" info true
+    #   log "My info message to controller log file only" info true controller
     #   log "My error message to user and log file" error
     #   log "My error message to log file only" error true
 
@@ -38,18 +46,33 @@ log() {
     local log_msg="$1"
     local log_level="${2:-info}"
     local quiet="${3:-false}"
+    local log_type="${4:-general}"
     local timestamp
     timestamp=$(date +"%Y-%m-%d %H:%M:%S")
 
     # Capitalize log level and format it to fit within 8-character brackets
     local log_level_formatted
-    log_level_formatted=$(printf "[%-8s]" "${log_level^^}")
+    log_level_formatted=$(printf "[%-5s]" "${log_level^^}")
 
     # Define the log entry format
     local log_entry="[$timestamp] $log_level_formatted $log_msg"
 
     # Log to file
-    echo "$log_entry" >> "$LOGDIR/$LOGFILE"
+    case "${log_type,,}" in        
+        "general")
+            echo "$log_entry" >> "$LOGFILE"
+            ;;
+        "monitor")
+            echo "$log_entry" >> "$LOGFILE_MONITOR"
+            ;;
+        "controller")
+            echo "$log_entry" >> "$LOGFILE_CONTROLLER"
+            ;;
+        *)
+            echo "INVALID LOG_TYPE for Log function used" >> "$LOGFILE"
+            exit 1
+            ;;
+    esac
 
     # Display to user unless "quiet" is set to true
     if [[ "$quiet" != true ]]; then
@@ -77,8 +100,8 @@ is_valid_endpoint_name() {
 
 check_root() {
     # Make sure logging is ready
-    mkdir -p $LOGDIR
-    touch $LOGDIR/$LOGFILE
+    mkdir -p "$LOGDIR"
+    touch "$LOGFILE"
 
     if [ "$EUID" -ne 0 ]; then
         log "This script must be run as root. Exiting..." error
@@ -106,19 +129,18 @@ check_jq_installed() {
 }
 
 init() {
-    mkdir -p $BINDIR
-    mkdir -p $CUSTOMBINDIR
-    mkdir -p $LOGDIR
-    mkdir -p $ETCDIR
+    mkdir -p "$BINDIR"
+    mkdir -p "$CUSTOMBINDIR"
+    mkdir -p "$ETCDIR"
 
-    touch $CONFIG
-    touch $MONITORREGISTER
-    touch $LOGDIR/$LOGFILE
-    touch $LOGDIR/$LOGFILE_MONITOR
+    touch "$CONFIG"
+    touch "$MONITORREGISTER"
+    touch "$LOGFILE_MONITOR"
+    touch "$LOGFILE_CONTROLLER"
 
-    chown dashboard $LOGDIR/$LOGFILE $LOGDIR/$LOGFILE_MONITOR
+    chown dashboard "$LOGFILE" "$LOGFILE_MONITOR" "$LOGFILE_CONTROLLER"
 
-    LOG_FILE="$LOGDIR/$LOGFILE_CONTROLLER"
+    LOG_FILE="$LOGFILE_CONTROLLER"
     exec > >(tee -a "$LOG_FILE") 2>&1
     exec 2>&1
 
