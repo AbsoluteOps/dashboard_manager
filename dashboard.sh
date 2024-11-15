@@ -33,6 +33,7 @@ log() {
     #                 - GENERAL     Sends to LOGFILE
     #                 - MONITOR     Sends to LOGFILE_MONITOR
     #                 - CONTROLLER  Sends to LOGFILE_CONTROLLER
+    #                 - ALL         Sends to all configured log files in log()
     #                 - <Other>     More can be added as long as LOGFILE_<TYPE> is set
     # Usage Examples:
     #   log "My info message to user and log file"
@@ -41,6 +42,8 @@ log() {
     #   log "My info message to controller log file only" info true controller
     #   log "My error message to user and log file" error
     #   log "My error message to log file only" error true
+    #   log "My warn message to monitor log file and user" warn false monitor
+    #   log "Some info message for all logs" info false all
 
     # Provided internal vars
     local log_msg="$1"
@@ -58,7 +61,7 @@ log() {
     local log_entry="[$timestamp] $log_level_formatted $log_msg"
 
     # Log to file
-    case "${log_type,,}" in        
+    case "${log_type,,}" in
         "general")
             echo "$log_entry" >> "$LOGFILE"
             ;;
@@ -66,6 +69,11 @@ log() {
             echo "$log_entry" >> "$LOGFILE_MONITOR"
             ;;
         "controller")
+            echo "$log_entry" >> "$LOGFILE_CONTROLLER"
+            ;;
+        "all")
+            echo "$log_entry" >> "$LOGFILE"
+            echo "$log_entry" >> "$LOGFILE_MONITOR"
             echo "$log_entry" >> "$LOGFILE_CONTROLLER"
             ;;
         *)
@@ -140,12 +148,11 @@ init() {
 
     chown dashboard "$LOGFILE" "$LOGFILE_MONITOR" "$LOGFILE_CONTROLLER"
 
-    LOG_FILE="$LOGFILE_CONTROLLER"
-    exec > >(tee -a "$LOG_FILE") 2>&1
+    exec > >(tee -a "$LOGFILE_CONTROLLER") 2>&1
     exec 2>&1
 
-    log "---------------------------" info true
-    log "Starting dashboard..." info true
+    log "---------------------------" info true all
+    log "Starting dashboard..." info true all
 }
 
 check_cron_service() {
