@@ -28,8 +28,9 @@ function usage() {
     echo "  -a, --api-key KEY               (Required) Set the API key."
     echo "  -n, --endpoint-name NAME        Set the endpoint name."
     echo "  -m, --install-monitors          Install all default monitors."
-    echo "  -c, --custom-monitor PATH       Install a custom monitor."
-    echo "  -k, --custom-monitor-name NAME  Set the name for the custom monitor."
+    echo "  -C, --custom-monitor PATH       Install a custom monitor."
+    echo "  -N, --custom-monitor-name NAME  Set the name for the custom monitor."
+    echo "  -A, --custom-monitor-args ARGS  Set the args for the custom monitor."
     echo "  -u, --uninstall                 Uninstall the dashboard."
     echo "  -h, --help                      Show this help message."
     exit 1
@@ -40,6 +41,10 @@ ENDPOINT_NAME=""
 INSTALL_MONITORS=false
 UNINSTALL=false
 INTERACTIVE=true
+
+if [[ "$#" -gt 0 ]]; then
+    INTERACTIVE=false
+fi
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -81,7 +86,7 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-if [[ "$#" -gt 0 ]]; then
+if [[ "$INTERACTIVE" == false ]]; then
     if [[ -z "$API_KEY_FLAG" ]]; then
         echo "Error: --api-key is required."
         usage
@@ -92,7 +97,7 @@ if [[ "$#" -gt 0 ]]; then
         usage
     fi
 
-    if [[ -n "$CUSTOM_MONITOR_NAME" && -n "INSTALL_MONITORS" ]]; then
+    if [[ -n "$CUSTOM_MONITOR_NAME" && "$INSTALL_MONITORS" == true ]]; then
         echo "Error: --custom-monitor-name cannot be used with --install-monitors."
         usage
     fi
@@ -870,6 +875,16 @@ get_installed_monitors
 if [[ "$INSTALL_MONITORS" == true ]]; then
     log "Installing all default monitors."
     install_default_monitors
+    exit 0
+fi
+
+if [[ -n "$CUSTOM_MONITOR_PATH" ]]; then
+    DISPLAY_ARGS="no args"
+    if [[ -n "$CUSTOM_MONITOR_ARGS" ]]; then
+        DISPLAY_ARGS="$CUSTOM_MONITOR_ARGS"
+    fi
+    log "Installing custom monitor $CUSTOM_MONITOR_NAME at $CUSTOM_MONITOR_PATH with $DISPLAY_ARGS."
+    install_custom_monitor
     exit 0
 fi
 
