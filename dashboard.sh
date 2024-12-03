@@ -22,6 +22,96 @@ ENDPOINT_ID=""
 declare -a INSTALLED_MONITORS
 declare -a AVAILABLE_MONITORS
 
+function usage() {
+    echo "Usage: $0 [options]"
+    echo "Options:"
+    echo "  -a, --api-key KEY               (Required) Set the API key."
+    echo "  -n, --endpoint-name NAME        Set the endpoint name."
+    echo "  -m, --install-monitors          Install all default monitors."
+    echo "  -C, --custom-monitor PATH       Install a custom monitor."
+    echo "  -N, --custom-monitor-name NAME  Set the name for the custom monitor."
+    echo "  -A, --custom-monitor-args ARGS  Set the args for the custom monitor."
+    echo "  -u, --uninstall                 Uninstall the dashboard."
+    echo "  -h, --help                      Show this help message."
+    exit 1
+}
+
+API_KEY_FLAG=""
+ENDPOINT_NAME=""
+INSTALL_MONITORS=false
+UNINSTALL=false
+INTERACTIVE=true
+
+if [[ "$#" -gt 0 ]]; then
+    INTERACTIVE=false
+fi
+
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        -a|--api-key)
+            API_KEY_FLAG="$2"
+            INTERACTIVE=false
+            shift
+            ;;
+        -n|--endpoint-name)
+            ENDPOINT_NAME="$2"
+            shift
+            ;;
+        -C|--custom-monitor)
+            CUSTOM_MONITOR_PATH="$2"
+            shift
+            ;;
+        -N|--custom-monitor-name)
+            CUSTOM_MONITOR_NAME="$2"
+            shift
+            ;;
+        -A|--custom-monitor-args)
+            CUSTOM_MONITOR_ARGS="$2"
+            shift
+            ;;
+        -m|--install-monitors)
+            INSTALL_MONITORS=true
+            ;;
+        -u|--uninstall)
+            UNINSTALL=true
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            echo "Unknown parameter passed: $1"
+            usage
+            ;;
+    esac
+    shift
+done
+
+if [[ "$INTERACTIVE" == false ]]; then
+    if [[ -z "$API_KEY_FLAG" ]]; then
+        echo "Error: --api-key is required."
+        usage
+    fi
+
+    if [[ -n "$CUSTOM_MONITOR_PATH" && -z "$CUSTOM_MONITOR_NAME" ]]; then
+        echo "Error: --custom-monitor-name is required with --custom-monitor."
+        usage
+    fi
+
+    if [[ -n "$CUSTOM_MONITOR_NAME" && "$INSTALL_MONITORS" == true ]]; then
+        echo "Error: --custom-monitor-name cannot be used with --install-monitors."
+        usage
+    fi
+fi
+
+if [ "$EUID" -ne 0 ]; then
+    echo "This script must be run as root. Exiting..."
+    exit 1
+fi
+
+# Make sure logging is ready
+mkdir -p "$LOGDIR"
+touch "$LOGFILE"
+
 log() {
     # Description: Use to log other functions results.
     # Expectation: LOGDIR and LOGFILE variables are defined.
@@ -106,20 +196,14 @@ is_valid_endpoint_name() {
     fi
 }
 
-check_root() {
-    # Make sure logging is ready
-    mkdir -p "$LOGDIR"
-    touch "$LOGFILE"
-
-    if [ "$EUID" -ne 0 ]; then
-        log "This script must be run as root. Exiting..." error
-        exit 1
-    fi
-}
-
 check_dashboard_user() {
     if ! id -u dashboard >/dev/null 2>&1; then
-        read -p "The 'dashboard' user does not exist. Do you want to create it? (y/n): " create_user
+        if [[ "$INTERACTIVE" == true ]]; then
+            read -p "The 'dashboard' user does not exist. Do you want to create it? (y/n): " create_user
+        else
+            create_user="y"
+        fi
+
         if [ "$create_user" == "y" ]; then
             sudo useradd -r -s /usr/sbin/nologin -d $ROOTDIR dashboard
             log "'dashboard' user created."
@@ -129,6 +213,7 @@ check_dashboard_user() {
         fi
     fi
 }
+
 check_jq_installed() {
     if ! command -v jq &> /dev/null; then
         log "jq is not installed. Please install jq to proceed." error
@@ -166,7 +251,12 @@ check_cron_service() {
     fi
 
     if ! systemctl is-enabled $service_name >/dev/null 2>&1; then
-        read -p "$service_name is not enabled. Do you want to enable it? (y/n): " enable_cron
+        if [[ "$INTERACTIVE" == true ]]; then
+            read -p "$service_name is not enabled. Do you want to enable it? (y/n): " enable_cron
+        else
+            enable_cron="y"
+        fi
+
         if [ "$enable_cron" == "y" ]; then
             sudo systemctl enable $service_name
             sudo systemctl start $service_name
@@ -183,7 +273,9 @@ check_cron_service() {
 }
 
 prompt_api_key() {
-    if [ -f $ETCDIR/api_key ]; then
+    if [[ "$INTERACTIVE" == false ]]; then
+        API_KEY=$API_KEY_FLAG
+    elif [ -f $ETCDIR/api_key ]; then
         log "Found an API key at $ETCDIR/api_key."
         API_KEY=$(cat $ETCDIR/api_key)
     else
@@ -290,11 +382,13 @@ check_endpoint_exists() {
         hostname=$(hostname)
     fi
 
-    read -p "This endpoint will be named $hostname. Do you want to keep that name? (y/n): " keep_name
-    if [ "$keep_name" != "y" ]; then
-        until rename_endpoint; do
-            log "Rename failed, retrying..." warn
-        done
+    if [[ "$INTERACTIVE" == true ]]; then
+        read -p "This endpoint will be named $hostname. Do you want to keep that name? (y/n): " keep_name
+        if [ "$keep_name" != "y" ]; then
+            until rename_endpoint; do
+                log "Rename failed, retrying..." warn
+            done
+        fi
     fi
 
     response=$(curl --silent --request GET \
@@ -303,7 +397,12 @@ check_endpoint_exists() {
 
     if echo $response | grep -q "\"name\":\"$hostname\""; then
         log "Endpoint with hostname $hostname already exists." warn
-        read -p "Do you want to reuse it, or give this server a custom name? (reuse/rename): " exists_action
+        if [[ "$INTERACTIVE" == true ]]; then
+            read -p "Do you want to reuse it, or give this server a custom name? (reuse/rename): " exists_action
+	else
+            exists_action="reuse"
+	fi
+
         if [ "$exists_action" == "reuse" ]; then
             ENDPOINT_ID=$(echo $response | jq -r ".data[] | select(.name == \"$hostname\") | .id")
             echo $ENDPOINT_ID > $ETCDIR/endpoint_id
@@ -320,7 +419,12 @@ check_endpoint_exists() {
         fi
     fi
 
-    read -p "No endpoint with hostname $hostname found. Do you want to create it? (y/n): " create_endpoint
+    if [[ "$INTERACTIVE" == true ]]; then
+        read -p "No endpoint with hostname $hostname found. Do you want to create it? (y/n): " create_endpoint
+    else
+        create_endpoint="y"
+    fi
+
     if [ "$create_endpoint" == "y" ]; then
         log "Creating endpoint..."
         create_response=$(curl --silent --request POST \
@@ -505,7 +609,11 @@ install_default_monitors() {
 }
 
 install_custom_monitor() {
-    read -p "Enter the path to the custom monitor script: " script_path
+    if [[ "$INTERACTIVE" == true ]]; then
+        read -p "Enter the path to the custom monitor script: " script_path
+    else
+        script_path=$CUSTOM_MONITOR_PATH
+    fi
 
     # Confirm the script exists
     if [ ! -f "$script_path" ]; then
@@ -523,51 +631,38 @@ install_custom_monitor() {
     default_period_unit=$(echo $default_period | grep -oP '\d+\K.*' | xargs)
 
     # Prompt for monitor name, suggesting the default if available
-    read -p "Enter the monitor name [${default_name}]: " monitor_name
+    if [[ "$INTERACTIVE" == true ]]; then
+        read -p "Enter the monitor name [${default_name}]: " monitor_name
+        read -p "Enter the user to run the monitor [${default_user}]: " monitor_user
+        read -p "Enter the period value (e.g., 5) [${default_period_value}]: " period_value
+        read -p "Enter the period unit (minutes/hours/days/weeks) [${default_period_unit}]: " period_unit
+        read -p "Enter the threshold (e.g., 80%) [${default_threshold}]: " monitor_threshold
+        read -p "Enter the direction (Above/Below) [${default_direction}]: " monitor_direction
+        read -p "Enter any additional arguments for the monitor [${default_args}]: " monitor_args
+    else
+        monitor_name=${CUSTOM_MONITOR_NAME:-$default_name}
+        monitor_args=${CUSTOM_MONITOR_ARGS:-$default_args}
+    fi
+
     monitor_name=${monitor_name:-$default_name}
-
-    # Prompt for user to run the monitor, suggesting the default if available
-    read -p "Enter the user to run the monitor [${default_user}]: " monitor_user
+    
     monitor_user=${monitor_user:-$default_user}
-
     # Check if the user exists
     if ! id -u "$monitor_user" > /dev/null 2>&1; then
         log "Error: User $monitor_user does not exist." error
         return 1
     fi
 
-    # Prompt for period value, suggesting the default if available
-    read -p "Enter the period value (e.g., 5) [${default_period_value}]: " period_value
+    valid_units=("minutes" "hours" "days" "weeks")
     period_value=${period_value:-$default_period_value}
-
-    # Define an array for the period units
-    period_units=("minutes" "hours" "days" "weeks")
-
-    # Present a menu for the period unit
-    echo "Select the period unit:"
-    for i in "${!period_units[@]}"; do
-        echo "$((i + 1)). ${period_units[$i]}"
-    done
-    read -p "Enter choice [1-${#period_units[@]}]: " period_unit_choice
-
-    # Validate the user's choice and get the period unit
-    if [[ $period_unit_choice -gt 0 && $period_unit_choice -le ${#period_units[@]} ]]; then
-        period_unit=${period_units[$((period_unit_choice - 1))]}
-    else
-        log "Invalid choice. Exiting..." error
+    period_unit=${period_unit:-$default_period_unit}
+    if [[ ! " ${valid_units[*]} " =~ " $period_unit " ]]; then
+        log "Invalid period unit. Exiting..." error
         return 1
     fi
 
-    # Prompt for threshold, suggesting the default if available
-    read -p "Enter the threshold (e.g., 80%) [${default_threshold}]: " monitor_threshold
     monitor_threshold=${monitor_threshold:-$default_threshold}
-
-    # Prompt for direction, suggesting the default if available
-    read -p "Enter the direction (Above/Below) [${default_direction}]: " monitor_direction
     monitor_direction=${monitor_direction:-$default_direction}
-
-    # Prompt for additional arguments, suggesting the default if available
-    read -p "Enter any additional arguments for the monitor [${default_args}]: " monitor_args
     monitor_args=${monitor_args:-$default_args}
 
     cp $script_path $CUSTOMBINDIR/
@@ -673,8 +768,13 @@ delete_monitor() {
 }
 
 uninstall() {
-    echo
-    read -p "Are you sure you want to remove the software and all history? (y/n): " confirm
+    if [[ "$INTERACTIVE" == true ]]; then
+        echo
+        read -p "Are you sure you want to remove the software and all history? (y/n): " confirm
+    else
+        confirm="y"
+    fi
+
     if [[ $confirm == "y" || $confirm == "Y" ]]; then
         for monitor_name in "${INSTALLED_MONITORS[@]}"; do
             delete_monitor "$monitor_name"
@@ -751,14 +851,42 @@ delete_monitor_menu() {
     fi
 }
 
-check_root
+uninstall_dashboard() {
+    log "Uninstalling the dashboard..."
+    uninstall
+    exit 0
+}
+
+init
+prompt_api_key
+check_endpoint_exists $ENDPOINT_NAME
+
+if [[ "$UNINSTALL" == true ]]; then
+    uninstall_dashboard
+fi
+
+log "No automation flag provided. Running interactive mode..."
+
 check_dashboard_user
 check_jq_installed
-init
 check_cron_service
-prompt_api_key
-check_endpoint_exists
 get_installed_monitors
+
+if [[ "$INSTALL_MONITORS" == true ]]; then
+    log "Installing all default monitors."
+    install_default_monitors
+    exit 0
+fi
+
+if [[ -n "$CUSTOM_MONITOR_PATH" ]]; then
+    DISPLAY_ARGS="no args"
+    if [[ -n "$CUSTOM_MONITOR_ARGS" ]]; then
+        DISPLAY_ARGS="$CUSTOM_MONITOR_ARGS"
+    fi
+    log "Installing custom monitor $CUSTOM_MONITOR_NAME at $CUSTOM_MONITOR_PATH with $DISPLAY_ARGS."
+    install_custom_monitor
+    exit 0
+fi
 
 while true; do
     show_menu
