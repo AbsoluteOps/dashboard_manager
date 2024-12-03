@@ -763,8 +763,13 @@ delete_monitor() {
 }
 
 uninstall() {
-    echo
-    read -p "Are you sure you want to remove the software and all history? (y/n): " confirm
+    if [[ "$INTERACTIVE" == true ]]; then
+        echo
+        read -p "Are you sure you want to remove the software and all history? (y/n): " confirm
+    else
+        confirm="y"
+    fi
+
     if [[ $confirm == "y" || $confirm == "Y" ]]; then
         for monitor_name in "${INSTALLED_MONITORS[@]}"; do
             delete_monitor "$monitor_name"
