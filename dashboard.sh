@@ -81,20 +81,31 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-if [[ -z "$API_KEY_FLAG" ]]; then
-    echo "Error: --api-key is required."
-    usage
+if [[ "$#" -gt 0 ]]; then
+    if [[ -z "$API_KEY_FLAG" ]]; then
+        echo "Error: --api-key is required."
+        usage
+    fi
+
+    if [[ -n "$CUSTOM_MONITOR_PATH" && -z "$CUSTOM_MONITOR_NAME" ]]; then
+        echo "Error: --custom-monitor-name is required with --custom-monitor."
+        usage
+    fi
+
+    if [[ -n "$CUSTOM_MONITOR_NAME" && -n "INSTALL_MONITORS" ]]; then
+        echo "Error: --custom-monitor-name cannot be used with --install-monitors."
+        usage
+    fi
 fi
 
-if [[ -n "CUSTOM_MONITOR_PATH" && -z "$CUSTOM_MONITOR_NAME" ]]; then
-    echo "Error: --custom-monitor-name is required with --custom-monitor."
-    usage
+if [ "$EUID" -ne 0 ]; then
+    echo "This script must be run as root. Exiting..."
+    exit 1
 fi
 
-if [[ -n "CUSTOM_MONITOR_NAME" && -n "INSTALL_MONITORS" ]]; then
-    echo "Error: --custom-monitor-name cannot be used with --install-monitors."
-    usage
-fi
+# Make sure logging is ready
+mkdir -p "$LOGDIR"
+touch "$LOGFILE"
 
 log() {
     # Description: Use to log other functions results.
@@ -180,17 +191,6 @@ is_valid_endpoint_name() {
     fi
 }
 
-check_root() {
-    # Make sure logging is ready
-    mkdir -p "$LOGDIR"
-    touch "$LOGFILE"
-
-    if [ "$EUID" -ne 0 ]; then
-        log "This script must be run as root. Exiting..." error
-        exit 1
-    fi
-}
-
 check_dashboard_user() {
     if ! id -u dashboard >/dev/null 2>&1; then
         if [[ "$INTERACTIVE" == true ]]; then
@@ -268,7 +268,9 @@ check_cron_service() {
 }
 
 prompt_api_key() {
-    if [ -f $ETCDIR/api_key ]; then
+    if [[ "$INTERACTIVE" == false ]]; then
+        API_KEY=$API_KEY_FLAG
+    elif [ -f $ETCDIR/api_key ]; then
         log "Found an API key at $ETCDIR/api_key."
         API_KEY=$(cat $ETCDIR/api_key)
     else
@@ -375,11 +377,13 @@ check_endpoint_exists() {
         hostname=$(hostname)
     fi
 
-    read -p "This endpoint will be named $hostname. Do you want to keep that name? (y/n): " keep_name
-    if [ "$keep_name" != "y" ]; then
-        until rename_endpoint; do
-            log "Rename failed, retrying..." warn
-        done
+    if [[ "$INTERACTIVE" == true ]]; then
+        read -p "This endpoint will be named $hostname. Do you want to keep that name? (y/n): " keep_name
+        if [ "$keep_name" != "y" ]; then
+            until rename_endpoint; do
+                log "Rename failed, retrying..." warn
+            done
+        fi
     fi
 
     response=$(curl --silent --request GET \
@@ -388,7 +392,12 @@ check_endpoint_exists() {
 
     if echo $response | grep -q "\"name\":\"$hostname\""; then
         log "Endpoint with hostname $hostname already exists." warn
-        read -p "Do you want to reuse it, or give this server a custom name? (reuse/rename): " exists_action
+        if [[ "$INTERACTIVE" == true ]]; then
+            read -p "Do you want to reuse it, or give this server a custom name? (reuse/rename): " exists_action
+	else
+            exists_action="reuse"
+	fi
+
         if [ "$exists_action" == "reuse" ]; then
             ENDPOINT_ID=$(echo $response | jq -r ".data[] | select(.name == \"$hostname\") | .id")
             echo $ENDPOINT_ID > $ETCDIR/endpoint_id
@@ -405,7 +414,12 @@ check_endpoint_exists() {
         fi
     fi
 
-    read -p "No endpoint with hostname $hostname found. Do you want to create it? (y/n): " create_endpoint
+    if [[ "$INTERACTIVE" == true ]]; then
+        read -p "No endpoint with hostname $hostname found. Do you want to create it? (y/n): " create_endpoint
+    else
+        create_endpoint="y"
+    fi
+
     if [ "$create_endpoint" == "y" ]; then
         log "Creating endpoint..."
         create_response=$(curl --silent --request POST \
@@ -833,9 +847,9 @@ uninstall_dashboard() {
     exit 0
 }
 
-check_root
+init
 prompt_api_key
-check_endpoint_exists
+check_endpoint_exists $ENDPOINT_NAME
 
 if [[ "$UNINSTALL" == true ]]; then
     uninstall_dashboard
@@ -845,7 +859,6 @@ log "No automation flag provided. Running interactive mode..."
 
 check_dashboard_user
 check_jq_installed
-init
 check_cron_service
 get_installed_monitors
 
