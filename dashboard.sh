@@ -857,6 +857,7 @@ uninstall_dashboard() {
     exit 0
 }
 
+check_dashboard_user
 init
 prompt_api_key
 check_endpoint_exists $ENDPOINT_NAME
@@ -867,7 +868,6 @@ fi
 
 log "No automation flag provided. Running interactive mode..."
 
-check_dashboard_user
 check_jq_installed
 check_cron_service
 get_installed_monitors
