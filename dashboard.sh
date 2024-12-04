@@ -551,7 +551,7 @@ check_and_create_monitor() {
             --form "run_interval_grace=$grace_period" \
             --form "run_interval_grace_type=$grace_unit" \
             --form "monitor_breach_value=$monitor_threshold" \
-            --form "monitor_breach_value_type=$monitor_direction")
+            --form "monitor_breach_value_type=${monitor_direction,,}")
 
         monitor_id=$(echo $create_response | jq -r '.data.id')
 
