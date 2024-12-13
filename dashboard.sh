@@ -30,7 +30,7 @@ function usage() {
     echo "  -m, --install-monitors                    Install all default monitors."
     echo "  -C, --custom-monitor PATH                 Install a custom monitor."
     echo "  -N, --custom-monitor-name NAME            Set the name for the custom monitor."
-    echo "  -B, --custom-monitor-threshold THRESHOLD  Set the threshold for breach in a custom monitor."
+    echo "  -T, --custom-monitor-threshold THRESHOLD  Set the threshold for breach in a custom monitor."
     echo "  -D, --custom-monitor-direction DIRECTION  Set the direction for breach in a custom monitor."
     echo "  -A, --custom-monitor-args ARGS            Set the args for the custom monitor."
     echo "  -u, --uninstall                           Uninstall the dashboard."
@@ -67,7 +67,7 @@ while [[ "$#" -gt 0 ]]; do
             CUSTOM_MONITOR_NAME="$2"
             shift
             ;;
-        -B|--custom-monitor-threshold)
+        -T|--custom-monitor-threshold)
             CUSTOM_MONITOR_THRESHOLD="$2"
             shift
             ;;
