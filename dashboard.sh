@@ -25,14 +25,16 @@ declare -a AVAILABLE_MONITORS
 function usage() {
     echo "Usage: $0 [options]"
     echo "Options:"
-    echo "  -a, --api-key KEY               (Required) Set the API key."
-    echo "  -n, --endpoint-name NAME        Set the endpoint name."
-    echo "  -m, --install-monitors          Install all default monitors."
-    echo "  -C, --custom-monitor PATH       Install a custom monitor."
-    echo "  -N, --custom-monitor-name NAME  Set the name for the custom monitor."
-    echo "  -A, --custom-monitor-args ARGS  Set the args for the custom monitor."
-    echo "  -u, --uninstall                 Uninstall the dashboard."
-    echo "  -h, --help                      Show this help message."
+    echo "  -a, --api-key KEY                         (Required) Set the API key."
+    echo "  -n, --endpoint-name NAME                  Set the endpoint name."
+    echo "  -m, --install-monitors                    Install all default monitors."
+    echo "  -C, --custom-monitor PATH                 Install a custom monitor."
+    echo "  -N, --custom-monitor-name NAME            Set the name for the custom monitor."
+    echo "  -B, --custom-monitor-threshold THRESHOLD  Set the threshold for breach in a custom monitor."
+    echo "  -D, --custom-monitor-direction DIRECTION  Set the direction for breach in a custom monitor."
+    echo "  -A, --custom-monitor-args ARGS            Set the args for the custom monitor."
+    echo "  -u, --uninstall                           Uninstall the dashboard."
+    echo "  -h, --help                                Show this help message."
     exit 1
 }
 
@@ -63,6 +65,14 @@ while [[ "$#" -gt 0 ]]; do
             ;;
         -N|--custom-monitor-name)
             CUSTOM_MONITOR_NAME="$2"
+            shift
+            ;;
+        -B|--custom-monitor-threshold)
+            CUSTOM_MONITOR_THRESHOLD="$2"
+            shift
+            ;;
+        -D|--custom-monitor-direction)
+            CUSTOM_MONITOR_DIRECTION="$2"
             shift
             ;;
         -A|--custom-monitor-args)
@@ -641,6 +651,8 @@ install_custom_monitor() {
         read -p "Enter any additional arguments for the monitor [${default_args}]: " monitor_args
     else
         monitor_name=${CUSTOM_MONITOR_NAME:-$default_name}
+        monitor_threshold=${CUSTOM_MONITOR_THRESHOLD:-$default_threshold}
+        monitor_direction=${CUSTOM_MONITOR_DIRECTION:-$default_direction}
         monitor_args=${CUSTOM_MONITOR_ARGS:-$default_args}
     fi
 
