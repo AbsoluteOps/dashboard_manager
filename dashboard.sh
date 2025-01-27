@@ -30,6 +30,8 @@ function usage() {
     echo "  -m, --install-monitors                    Install all default monitors."
     echo "  -C, --custom-monitor PATH                 Install a custom monitor."
     echo "  -N, --custom-monitor-name NAME            Set the name for the custom monitor."
+    echo "  -P, --custom-monitor-period VALUE         Set the value of the period of time."
+    echo "  -U, --custom-monitor-period-unit TYPE     Set the type of unit for the period of time (minutes, hours, days, weeks)."
     echo "  -T, --custom-monitor-threshold THRESHOLD  Set the threshold for breach in a custom monitor."
     echo "  -D, --custom-monitor-direction DIRECTION  Set the direction for breach in a custom monitor."
     echo "  -A, --custom-monitor-args ARGS            Set the args for the custom monitor."
@@ -264,13 +266,17 @@ init() {
     touch "$LOGFILE_MONITOR"
     touch "$LOGFILE_CONTROLLER"
 
+    log "---------------------------" info true all
+    log "Starting dashboard..." info true all
+
+    check_dashboard_user
+    check_docker_group
+    check_jq_installed
+
     chown dashboard "$LOGFILE" "$LOGFILE_MONITOR" "$LOGFILE_CONTROLLER"
 
     exec > >(tee -a "$LOGFILE_CONTROLLER") 2>&1
     exec 2>&1
-
-    log "---------------------------" info true all
-    log "Starting dashboard..." info true all
 }
 
 check_cron_service() {
@@ -692,7 +698,7 @@ install_custom_monitor() {
     fi
 
     monitor_name=${monitor_name:-$default_name}
-    
+
     monitor_user=${monitor_user:-$default_user}
     # Check if the user exists
     if ! id -u "$monitor_user" > /dev/null 2>&1; then
@@ -904,10 +910,7 @@ uninstall_dashboard() {
     exit 0
 }
 
-check_dashboard_user
-check_docker_group
 init
-check_jq_installed
 prompt_api_key
 check_endpoint_exists $ENDPOINT_NAME
 
