@@ -567,10 +567,20 @@ check_and_create_monitor() {
         --url "https://dashboard.absoluteops.com/api/monitors/?endpoint_id=$ENDPOINT_ID" \
 	--header "Authorization: Bearer $API_KEY")
 
-    if echo $response | grep -q "\"name\":\"$monitor_name\""; then
+        readarray -t existing_names < <(echo "$response" | jq -r '.data[].name')
+    found_name=false
+    for existing_name in "${existing_names[@]}"; do
+        if [[ "$existing_name" == "$monitor_name" ]]; then
+	    echo $existing_name
+	    echo $monitor_name
+            found_name=true
+	fi
+    done
+
+    if [ "$found_name" == "true" ]; then
         monitor_id=$(echo "$response" | jq -r --arg name "$monitor_name" '.data[] | select(.name == $name) | .id')
         monitor_code=$(echo "$response" | jq -r --arg name "$monitor_name" '.data[] | select(.name == $name) | .code')
-	    log "found monitor $monitor_id"
+	log "found monitor $monitor_id"
     else
         # Create the monitor using the API
         create_response=$(curl --silent --request POST \
