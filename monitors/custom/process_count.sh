@@ -33,7 +33,7 @@ fi
 PROCESS_COUNT=$(ps -ef | grep -w $PROCESS_NAME | grep -v grep | wc -l)
 
 # Send the process count to the monitor
-echo curl --silent --request POST --url "$URL?value=$PROCESS_COUNT"
+curl --silent --request POST --url "$URL?value=$PROCESS_COUNT"
 if [ $? != 0 ]; then
     echo "Failed to send process count."
 fi

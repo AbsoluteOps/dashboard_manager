@@ -75,6 +75,14 @@ while [[ "$#" -gt 0 ]]; do
             CUSTOM_MONITOR_DIRECTION="$2"
             shift
             ;;
+        -P|--custom-monitor-period)
+            CUSTOM_MONITOR_PERIOD="$2"
+            shift
+            ;;
+        -U|--custom-monitor-period-unit)
+            CUSTOM_MONITOR_PERIOD_UNIT="$2"
+            shift
+            ;;
         -A|--custom-monitor-args)
             CUSTOM_MONITOR_ARGS="$2"
             shift
@@ -221,6 +229,21 @@ check_dashboard_user() {
             log "User creation declined. Exiting..." error
             exit 1
         fi
+    fi
+}
+
+check_docker_group() {
+    if getent group docker > /dev/null 2>&1; then
+        echo "Docker group exists."
+        if id -nG "dashboard" | grep -qw "docker"; then
+            log "Dashboard user is already in the docker group."
+        else
+            log "Adding dashboard user to the docker group."
+            usermod -aG docker dashboard
+            log "Dashboard user added to the docker group."
+        fi
+    else
+        log "Docker group does not exist."
     fi
 }
 
@@ -653,6 +676,8 @@ install_custom_monitor() {
         monitor_name=${CUSTOM_MONITOR_NAME:-$default_name}
         monitor_threshold=${CUSTOM_MONITOR_THRESHOLD:-$default_threshold}
         monitor_direction=${CUSTOM_MONITOR_DIRECTION:-$default_direction}
+	period_value=${CUSTOM_MONITOR_PERIOD:-$default_period_value}
+	period_unit=${CUSTOM_MONITOR_PERIOD_UNIT:-$default_period_unit}
         monitor_args=${CUSTOM_MONITOR_ARGS:-$default_args}
     fi
 
@@ -870,7 +895,9 @@ uninstall_dashboard() {
 }
 
 check_dashboard_user
+check_docker_group
 init
+check_jq_installed
 prompt_api_key
 check_endpoint_exists $ENDPOINT_NAME
 
@@ -880,7 +907,6 @@ fi
 
 log "No automation flag provided. Running interactive mode..."
 
-check_jq_installed
 check_cron_service
 get_installed_monitors
 
