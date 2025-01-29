@@ -5,6 +5,7 @@
 ROOTDIR=/opt/dashboard
 BINDIR="$ROOTDIR/bin"
 ETCDIR="$ROOTDIR/etc"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Logging vars (review log() info for more context)
 LOGDIR="$ROOTDIR/log"
@@ -376,7 +377,7 @@ get_script_name_from_monitor_name() {
     monitor_name=$1
     script_name=""
 
-    for monitor in monitors/default/*; do
+    for monitor in $SCRIPT_DIR/monitors/default/*; do
         default_name=$(grep -oP '# Name: \K.*' "$monitor")
         if [ "$default_name" == "$monitor_name" ]; then
             script_name=$monitor
@@ -652,7 +653,7 @@ install_default_monitor() {
 
 install_default_monitors() {
     log "Installing default monitors..."
-    for monitor in monitors/default/*; do
+    for monitor in $SCRIPT_DIR/monitors/default/*; do
         install_default_monitor $monitor
     done
 }
@@ -749,7 +750,7 @@ list_available_monitors() {
     echo "Available Monitors:"
 
     all_monitors=()
-    for monitor in monitors/default/*; do
+    for monitor in $SCRIPT_DIR/monitors/default/*; do
         monitor_name=$(grep -oP '# Name: \K.*' $monitor)
         all_monitors+=("$monitor_name")
     done
