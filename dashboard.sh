@@ -16,13 +16,28 @@ LOGFILE_CONTROLLER="$LOGDIR/dashboard_controller.log"
 CONFIG="$ETCDIR/config.settings"
 CUSTOMBINDIR="$ROOTDIR/custom"
 MONITORREGISTER="$ETCDIR/monitor.register"
+# JSONCONFIG - PREP NEW CONFIG MANAGER MODULE
+DCONFIG="$ETCDIR/dashboard_new.settings"
 
 API_KEY=""
+API_KEY_FLAG=""
+
 ENDPOINT_ID=""
+ENDPOINT_NAME=""
+# ~ Coming soon ~
+ENDPOINT_TYPE_ID="1"
+PARENT_ENDPOINT_NAME=""
+PARENT_ENDPOINT_ID=""
+#
+
+INSTALL_MONITORS=false
+UNINSTALL=false
+INTERACTIVE=true
 
 declare -a INSTALLED_MONITORS
 declare -a AVAILABLE_MONITORS
 
+# Help menu
 function usage() {
     echo "Usage: $0 [options]"
     echo "Options:"
@@ -40,12 +55,6 @@ function usage() {
     echo "  -h, --help                                Show this help message."
     exit 1
 }
-
-API_KEY_FLAG=""
-ENDPOINT_NAME=""
-INSTALL_MONITORS=false
-UNINSTALL=false
-INTERACTIVE=true
 
 if [[ "$#" -gt 0 ]]; then
     INTERACTIVE=false
@@ -107,23 +116,6 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-if [[ "$INTERACTIVE" == false ]]; then
-    if [[ -z "$API_KEY_FLAG" ]]; then
-        echo "Error: --api-key is required."
-        usage
-    fi
-
-    if [[ -n "$CUSTOM_MONITOR_PATH" && -z "$CUSTOM_MONITOR_NAME" ]]; then
-        echo "Error: --custom-monitor-name is required with --custom-monitor."
-        usage
-    fi
-
-    if [[ -n "$CUSTOM_MONITOR_NAME" && "$INSTALL_MONITORS" == true ]]; then
-        echo "Error: --custom-monitor-name cannot be used with --install-monitors."
-        usage
-    fi
-fi
-
 if [ "$EUID" -ne 0 ]; then
     echo "This script must be run as root. Exiting..."
     exit 1
@@ -133,72 +125,43 @@ fi
 mkdir -p "$LOGDIR"
 touch "$LOGFILE"
 
-log() {
-    # Description: Use to log other functions results.
-    # Expectation: LOGDIR and LOGFILE variables are defined.
-    # Structure: log "<message>" <optional:log_level> <optional:quiet_bool> <optional:log_type>
-    #   "<message>"   Message enclosed in double quotes to act as initial value.
-    #   <log_level>   Whatever log level. Current expecting: info (default), warn, error, other.
-    #   <quiet_bool>  Bool for quiet (true/false). Used to remove output to user when true, but still sends to log.
-    #   <log_type>    General is defaulted/assumed. When define, must add other optionals. Allowed types:
-    #                 - GENERAL     Sends to LOGFILE
-    #                 - MONITOR     Sends to LOGFILE_MONITOR
-    #                 - CONTROLLER  Sends to LOGFILE_CONTROLLER
-    #                 - ALL         Sends to all configured log files in log()
-    #                 - <Other>     More can be added as long as LOGFILE_<TYPE> is set
-    # Usage Examples:
-    #   log "My info message to user and log file"
-    #   log "My info message to user and log file" info
-    #   log "My info message to log file only" info true
-    #   log "My info message to controller log file only" info true controller
-    #   log "My error message to user and log file" error
-    #   log "My error message to log file only" error true
-    #   log "My warn message to monitor log file and user" warn false monitor
-    #   log "Some info message for all logs" info false all
+# ------------------
+# Load modules
+# ------------------
 
-    # Provided internal vars
-    local log_msg="$1"
-    local log_level="${2:-info}"
-    local quiet="${3:-false}"
-    local log_type="${4:-general}"
-    local timestamp
-    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+# Import logger module
+source $SCRIPT_DIR/bin/logger.sh
 
-    # Capitalize log level and format it to fit within 8-character brackets
-    local log_level_formatted
-    log_level_formatted=$(printf "[%-5s]" "${log_level^^}")
+# Import config_manager module
+source $SCRIPT_DIR/bin/config_manager.sh
 
-    # Define the log entry format
-    local log_entry="[$timestamp] $log_level_formatted $log_msg"
 
-    # Log to file
-    case "${log_type,,}" in
-        "general")
-            echo "$log_entry" >> "$LOGFILE"
-            ;;
-        "monitor")
-            echo "$log_entry" >> "$LOGFILE_MONITOR"
-            ;;
-        "controller")
-            echo "$log_entry" >> "$LOGFILE_CONTROLLER"
-            ;;
-        "all")
-            echo "$log_entry" >> "$LOGFILE"
-            echo "$log_entry" >> "$LOGFILE_MONITOR"
-            echo "$log_entry" >> "$LOGFILE_CONTROLLER"
-            ;;
-        *)
-            echo "INVALID LOG_TYPE for Log function used" >> "$LOGFILE"
-            exit 1
-            ;;
-    esac
+# ------------------
+# Functions
+# ------------------
 
-    # Display to user unless "quiet" is set to true
-    if [[ "$quiet" != true ]]; then
-        echo "  $log_msg"
-    fi
+# Help menu
+function usage() {
+    echo "Usage: $0 [options]"
+    echo "Options:"
+    echo "  -a, --api-key KEY                         (Required) Set the API key."
+    echo "  -n, --endpoint-name NAME                  Set the endpoint name."
+    echo "  -m, --install-monitors                    Install all default monitors."
+    echo "  -C, --custom-monitor PATH                 Install a custom monitor."
+    echo "  -N, --custom-monitor-name NAME            Set the name for the custom monitor."
+    echo "  -P, --custom-monitor-period VALUE         Set the value of the period of time."
+    echo "  -U, --custom-monitor-period-unit TYPE     Set the type of unit for the period of time (minutes, hours, days, weeks)."
+    echo "  -T, --custom-monitor-threshold THRESHOLD  Set the threshold for breach in a custom monitor."
+    echo "  -D, --custom-monitor-direction DIRECTION  Set the direction for breach in a custom monitor."
+    echo "  -A, --custom-monitor-args ARGS            Set the args for the custom monitor."
+    echo "  -u, --uninstall                           Uninstall the dashboard."
+    echo "  -h, --help                                Show this help message."
+    log "Initiated help"
+    exit 1
 }
 
+
+# Check that endpoint is valid
 is_valid_endpoint_name() {
     local input_string=$1
 
@@ -217,6 +180,7 @@ is_valid_endpoint_name() {
     fi
 }
 
+# Ensure dashboard user is staged.
 check_dashboard_user() {
     if ! id -u dashboard >/dev/null 2>&1; then
         if [[ "$INTERACTIVE" == true ]]; then
@@ -235,6 +199,7 @@ check_dashboard_user() {
     fi
 }
 
+# For container script make sure dashboard user is part of docker group.
 check_docker_group() {
     if getent group docker > /dev/null 2>&1; then
         echo "Docker group exists."
@@ -250,6 +215,7 @@ check_docker_group() {
     fi
 }
 
+# Make sure JQ is installed to handle json.
 check_jq_installed() {
     if ! command -v jq &> /dev/null; then
         log "jq is not installed. Please install jq to proceed." error
@@ -257,6 +223,7 @@ check_jq_installed() {
     fi
 }
 
+# Initialize the script and check startup.
 init() {
     mkdir -p "$BINDIR"
     mkdir -p "$CUSTOMBINDIR"
@@ -269,6 +236,26 @@ init() {
 
     log "---------------------------" info true all
     log "Starting dashboard..." info true all
+
+    if [[ "$INTERACTIVE" == false ]]; then
+        if [[ -z "$API_KEY_FLAG" ]]; then
+            echo "Error: --api-key is required."
+            usage
+        fi
+
+        if [[ -n "$CUSTOM_MONITOR_PATH" && -z "$CUSTOM_MONITOR_NAME" ]]; then
+            echo "Error: --custom-monitor-name is required with --custom-monitor."
+            usage
+        fi
+
+        if [[ -n "$CUSTOM_MONITOR_NAME" && "$INSTALL_MONITORS" == true ]]; then
+            echo "Error: --custom-monitor-name cannot be used with --install-monitors."
+            usage
+        fi
+    fi
+
+    # JSONCONFIG - Stage initial config or make sure it's available
+    create_json_config "$DCONFIG"
 
     check_dashboard_user
     check_docker_group
@@ -313,16 +300,27 @@ check_cron_service() {
 }
 
 prompt_api_key() {
+    # JSONCONFIG - Set api key var
+    config_api_key="$(read_json_value "$DCONFIG" "endpoint_data.api_key")"
+
     if [[ "$INTERACTIVE" == false ]]; then
         API_KEY=$API_KEY_FLAG
     elif [ -f $ETCDIR/api_key ]; then
         log "Found an API key at $ETCDIR/api_key."
         API_KEY=$(cat $ETCDIR/api_key)
+    # JSONCONFIG - Condition to pull from new config
+    elif [[ -n "$config_api_key" ]]; then
+        log "Found an API key at $DCONFIG."
+        API_KEY="$config_api_key"
     else
         read -p "Please enter your API key: " API_KEY
         read -p "Do you want to save the API key? (y/n): " save_key
         if [ "$save_key" == "y" ]; then
             echo $API_KEY > $ETCDIR/api_key
+
+            # JSONCONFIG - Store in new config
+            write_json_value "FILE.conf" "endpoint_data.api_key" "$API_KEY"
+
             log "API key saved to $ETCDIR/api_key."
         fi
     fi
@@ -331,6 +329,10 @@ prompt_api_key() {
 check_endpoint_info() {
     if [ -f $ETCDIR/system_info ]; then
         current_system_info=$(cat $ETCDIR/system_info)
+    # JSONCONFIG - Condition to pull from new config
+    elif [[ $(verify_json_exists "$DCONFIG" "endpoint_data.system_info") ]]; then
+        log "Found system info"
+        current_system_info=""
     else
         current_system_info=""
     fi
