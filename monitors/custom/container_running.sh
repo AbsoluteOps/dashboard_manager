@@ -30,7 +30,7 @@ if [ "$LOG_OUTPUT" == "true" ]; then
 fi
 
 # Check if the Docker container is running
-CONTAINER_RUNNING=$(docker ps --filter "name=$CONTAINER_NAME" --filter "status=running" --format "{{.Names}}" | grep -w "$CONTAINER_NAME" | wc -l)
+CONTAINER_RUNNING=$(docker ps --filter "name=^$CONTAINER_NAME\$" --filter "status=running" --format "{{.Names}}" | grep -w "$CONTAINER_NAME" | wc -l)
 
 # Send the container running status to the monitor
 curl --silent --request POST --url "$URL?value=$CONTAINER_RUNNING"
